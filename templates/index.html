@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1220">
+  <title>FirewallAI | Traffic Classifier</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="#dashboard" aria-label="FirewallAI home">
+      <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 27 7v8c0 7-4.7 11.7-11 14C9.7 26.7 5 22 5 15V7l11-4Z"/><path d="m11 16 3.3 3.3L21.5 12"/></svg></span>
+      <span class="brand-copy"><b>Firewall<span>AI</span></b><small>TRAFFIC CLASSIFIER</small></span>
+    </a>
+    <div class="nav-caption">WORKSPACE</div>
+    <button class="nav-item active" data-page="dashboard"><span class="nav-icon">▦</span> Dashboard</button>
+    <button class="nav-item" data-page="classify"><span class="nav-icon">⌁</span> Classify traffic</button>
+    <button class="nav-item" data-page="history"><span class="nav-icon">◷</span> Prediction history</button>
+    <div class="sidebar-bottom"><span class="pulse"></span><div><b id="side-status">Checking model…</b><small>Local development environment</small></div></div>
+    <div class="side-foot">STUDENT PROJECT · DEMO BUILD</div>
+  </aside>
+
+  <main class="main-area">
+    <header class="topbar">
+      <button class="mobile-menu" id="mobile-menu" aria-label="Toggle navigation">☰</button>
+      <div class="breadcrumb">Workspace <span>/</span> <b id="breadcrumb-current">Dashboard</b></div>
+      <div class="topbar-right"><span class="system-pill"><i></i><span id="header-status">SYSTEM CHECKING</span></span><span class="avatar">FA</span></div>
+    </header>
+
+    <section class="page active" id="page-dashboard">
+      <div class="eyebrow"><span class="eyebrow-line"></span> CYBERSECURITY ANALYTICS</div>
+      <h1>Firewall Traffic <span>Classification</span></h1>
+      <p class="page-subtitle">Explore network traffic characteristics and classify the predicted firewall action.</p>
+
+      <div class="hero-panel">
+        <div class="hero-copy">
+          <div class="hero-label"><span class="spark">✦</span> RANDOM FOREST · MACHINE LEARNING</div>
+          <h2>Visibility starts<br>with every <em>packet.</em></h2>
+          <p>Submit a traffic sample and see how a trained classifier categorizes it into Allow, Deny, Drop, or Reset.</p>
+          <button class="btn btn-primary" data-go="classify">Classify traffic <span class="arrow">↗</span></button>
+          <div class="hero-meta"><span class="tiny-check">✓</span> UCI Firewall Dataset · No database required</div>
+        </div>
+        <div class="network-visual" aria-hidden="true">
+          <div class="network-grid"></div><div class="orbit orbit-a"></div><div class="orbit orbit-b"></div><div class="orbit orbit-c"></div>
+          <div class="network-core"><svg viewBox="0 0 70 76"><path d="M35 4 62 14v20c0 17-11 29-27 37C19 63 8 51 8 34V14L35 4Z"/><path d="m23 37 8 8 17-19"/></svg><span>MODEL<br>CORE</span></div>
+          <div class="network-node node-a"><span>↗</span></div><div class="network-node node-b"><span>⌁</span></div><div class="network-node node-c"><span>◎</span></div><div class="network-node node-d"><span>⇄</span></div>
+          <div class="visual-chip chip-top"><i></i> MODEL ACTIVE</div><div class="visual-chip chip-bottom">RF CLASSIFIER <b>v1.0</b></div>
+        </div>
+      </div>
+
+      <div class="section-heading"><div><h2>Prediction overview</h2><p>Summary of classifications in this browser</p></div><span class="session-tag"><span></span> SESSION DATA</span></div>
+      <div class="stat-grid">
+        <article class="stat-card"><div class="stat-heading">Total predictions<span class="stat-icon icon-blue">⌁</span></div><strong id="stat-total">0</strong><div class="stat-foot">Classifications performed</div></article>
+        <article class="stat-card"><div class="stat-heading">Allow<span class="stat-icon icon-green">✓</span></div><strong id="stat-allow">0</strong><div class="stat-foot">Predicted permitted</div></article>
+        <article class="stat-card"><div class="stat-heading">Deny<span class="stat-icon icon-red">⊘</span></div><strong id="stat-deny">0</strong><div class="stat-foot">Predicted rejected</div></article>
+        <article class="stat-card"><div class="stat-heading">Drop / Reset<span class="stat-icon icon-violet">↯</span></div><strong id="stat-other">0</strong><div class="stat-foot">Other predicted actions</div></article>
+      </div>
+
+      <div class="section-heading history-head"><div><h2>Recent predictions</h2><p>Latest results from your current browser</p></div><button class="text-link" data-go="history">View history <span>→</span></button></div>
+      <div class="table-card"><div class="table-scroll"><table><thead><tr><th>TIME</th><th>SOURCE PORT</th><th>DEST. PORT</th><th>PACKETS</th><th>PREDICTED ACTION</th><th>CONFIDENCE</th></tr></thead><tbody id="recent-table"><tr><td class="empty-cell" colspan="6"><div class="empty-icon">⌁</div><b>No predictions yet</b><span>Run your first classification to see results here.</span><button class="text-link" data-go="classify">Start classifying →</button></td></tr></tbody></table></div></div>
+      <div class="disclaimer"><span>ⓘ</span><p><b>Educational demo only.</b> This prototype does not control a real firewall. The model is trained on the public UCI Internet Firewall Data dataset; its predictions are not guarantees for live traffic.</p></div>
+    </section>
+
+    <section class="page" id="page-classify">
+      <div class="eyebrow"><span class="eyebrow-line"></span> MODEL INPUT</div>
+      <h1>Classify <span>network traffic</span></h1>
+      <p class="page-subtitle">Enter the traffic features below and run your Random Forest classifier.</p>
+      <div class="classify-layout">
+        <form class="panel form-panel" id="traffic-form">
+          <div class="panel-heading"><div class="panel-heading-icon">⌁</div><div><h2>Traffic characteristics</h2><p>Fill in the sample's network traffic measurements.</p></div></div>
+          <div class="form-grid">
+            <label class="field">Source port <span class="field-range">0–65535</span><input type="number" name="source_port" min="0" max="65535" step="1" value="51524" required><small>Sender port from the dataset.</small></label>
+            <label class="field">Destination port <span class="field-range">0–65535</span><input type="number" name="destination_port" min="0" max="65535" step="1" value="443" required><small>Receiving service port.</small></label>
+            <label class="field">NAT source port <span class="field-range">0–65535</span><input type="number" name="nat_source_port" min="0" max="65535" step="1" value="51524" required><small>Translated source port; use 0 if recorded as 0.</small></label>
+            <label class="field">NAT destination port <span class="field-range">0–65535</span><input type="number" name="nat_destination_port" min="0" max="65535" step="1" value="443" required><small>Translated destination port.</small></label>
+            <label class="field">Total bytes<input type="number" name="total_bytes" min="0" step="any" value="85000" required><small>Total bytes in this traffic record.</small></label>
+            <label class="field">Bytes sent<input type="number" name="bytes_sent" min="0" step="any" value="50000" required><small>Bytes sent in the forward direction.</small></label>
+            <label class="field">Bytes received<input type="number" name="bytes_received" min="0" step="any" value="35000" required><small>Bytes received in the reverse direction.</small></label>
+            <label class="field">Total packets<input type="number" name="total_packets" min="1" step="1" value="120" required><small>Total packets in the connection.</small></label>
+            <label class="field">Elapsed time <span class="field-range">seconds</span><input type="number" name="connection_duration" min="0" step="any" value="12.5" required><small>Duration recorded for the flow.</small></label>
+            <label class="field">Packets sent<input type="number" name="forward_packets" min="0" step="1" value="70" required><small>Forward-direction packet count.</small></label>
+            <label class="field">Packets received<input type="number" name="backward_packets" min="0" step="1" value="50" required><small>Reverse-direction packet count.</small></label>
+          </div>
+          <div class="form-message" id="form-message" role="alert" aria-live="polite"></div>
+          <div class="form-actions"><button type="reset" class="btn btn-secondary">Clear form</button><button type="submit" class="btn btn-primary" id="predict-btn">Predict firewall action <span class="arrow">→</span></button></div>
+        </form>
+        <aside class="panel explain-panel">
+          <div class="explain-graphic"><div class="explain-shield">⬡<b>✓</b></div><span class="graphic-dot dot-one"></span><span class="graphic-dot dot-two"></span></div>
+          <h3>How classification works</h3><p>Your inputs are sent to the local Flask API. The trained Random Forest model returns one of four classes.</p>
+          <div class="process-step"><b>01</b><span>Traffic features submitted</span></div><div class="process-step"><b>02</b><span>Random Forest inference</span></div><div class="process-step"><b>03</b><span>Predicted action returned</span></div>
+          <div class="note-box"><b>Demo model notice</b><p>The model uses the UCI Internet Firewall Data dataset. Its Reset-Both class has very few original examples, so class-specific performance must be interpreted cautiously.</p></div>
+        </aside>
+      </div>
+
+      <section class="panel result-panel hidden" id="result-panel" aria-live="polite">
+        <div class="result-header"><div><div class="eyebrow"><span class="eyebrow-line"></span> CLASSIFICATION RESULT</div><h2>Your prediction</h2></div><span class="result-star">✦</span></div>
+        <div class="result-main"><div id="result-badge" class="action-badge allow">ALLOW</div><div class="result-text"><h3 id="result-title">Traffic may be permitted</h3><p id="result-description"></p></div></div>
+        <div class="result-metrics"><div><span>Prediction confidence</span><strong id="result-confidence">—</strong><div class="confidence-track"><span id="confidence-bar"></span></div></div><div><span>Model</span><strong>Random Forest</strong></div><div><span>Output classes</span><strong>4 actions</strong></div></div>
+        <div class="result-footnote">Confidence is the model's highest class probability, not a guarantee of real-world correctness.</div>
+        <button class="btn btn-primary" id="classify-another">Classify another sample <span class="arrow">→</span></button>
+      </section>
+    </section>
+
+    <section class="page" id="page-history">
+      <div class="eyebrow"><span class="eyebrow-line"></span> CLASSIFICATION LOG</div><h1>Prediction <span>history</span></h1><p class="page-subtitle">Review results saved in this browser. No server database is used.</p>
+      <div class="history-tools"><div class="search-box"><span>⌕</span><input id="history-search" type="search" placeholder="Search source or destination port…" aria-label="Search prediction history"></div><select id="history-filter" aria-label="Filter by action"><option value="all">All actions</option><option>Allow</option><option>Deny</option><option>Drop</option><option>Reset</option></select><button class="btn btn-secondary" id="clear-history">Clear history</button></div>
+      <div class="table-card"><div class="table-scroll"><table><thead><tr><th>TIME</th><th>SOURCE PORT</th><th>DEST. PORT</th><th>PACKETS</th><th>NAT SOURCE</th><th>ACTION</th><th>CONFIDENCE</th></tr></thead><tbody id="history-table"><tr><td class="empty-cell" colspan="7">No history saved yet.</td></tr></tbody></table></div></div>
+      <div class="history-note"><span>ⓘ</span> History is stored in your browser's local storage. Clearing browser data may remove it. This is not a permanent or shared database.</div>
+    </section>
+
+    <footer class="page-footer"><span>FirewallAI <b>·</b> Student project prototype</span><span>Python Flask + Pure-Python Random Forest</span></footer>
+  </main>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+echo ================================================
+echo Start Firewall Action Classification Website
+echo ================================================
+if not exist ".venv\Scripts\python.exe" (
+  echo ERROR: Virtual environment not found.
+  echo First double-click setup_project.bat.
+  pause
+  exit /b 1
+)
+if not exist "model\firewall_random_forest.json" (
+  echo ERROR: Trained model was not found.
+  echo First copy data\log2.csv here and run train_model.bat.
+  pause
+  exit /b 1
+)
+echo When Flask starts, open http://127.0.0.1:5000
+ echo Keep this window open while using the website.
+".venv\Scripts\python.exe" app.py
+pause

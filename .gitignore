@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+# The dataset and generated outputs can be large or user-generated.
+data/log2.csv
+# Generated model and report are recreated by train_model.py.
+model/firewall_random_forest.json
+data/evaluation_report.json
