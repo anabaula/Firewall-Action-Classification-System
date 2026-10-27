@@ -1,11 +1,8 @@
-"""Train and evaluate the educational firewall Random Forest with leakage controls.
+"""Train NetSentry with scikit-learn, following the classmate's Colab approach.
 
-Default input: classmate-provided data/log2_cleaned.csv (if present), otherwise
-original UCI data/log2.csv. The supplied notebook is retained for provenance,
-but its scikit-learn model is not compatible with this Flask app's JSON loader.
-
-Stages: validate/clean -> stratified 64/16/20 -> compare two sampling policies
-on validation macro-F1 -> retrain on development set -> one held-out test.
+Validated UCI data -> 80/20 stratified split -> median imputer and
+100-tree RandomForestClassifier(class_weight="balanced") -> held-out evaluation.
+Five-fold CV uses training data only; held-out test data is never trained on.
 """
 from __future__ import annotations
 
@@ -14,77 +11,91 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from data_pipeline import (
-    capped_resampling,
-    load_dataset,
-    original_distribution_sample,
-    split_train_validation_test,
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import (
+    accuracy_score, classification_report, confusion_matrix, f1_score,
 )
-from forest_model import ACTIONS, predict, save_model, train_forest
+from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
+from sklearn.pipeline import Pipeline
+
+from data_pipeline import load_dataset
+from model_service import ACTIONS, DATASET_NAME, FEATURE_NAMES
 
 BASE_DIR = Path(__file__).resolve().parent
 CLEANED_DATA_PATH = BASE_DIR / "data" / "log2_cleaned.csv"
 ORIGINAL_DATA_PATH = BASE_DIR / "data" / "log2.csv"
-MODEL_PATH = BASE_DIR / "model" / "firewall_random_forest.json"
+MODEL_PATH = BASE_DIR / "model" / "firewall_random_forest.joblib"
 REPORT_PATH = BASE_DIR / "data" / "evaluation_report.json"
 QUALITY_PATH = BASE_DIR / "data" / "data_quality_report.json"
 DATASET_DOI = "10.24432/C5131M"
 
 
-def evaluation_metrics(rows: list[dict], model: dict) -> dict:
-    if not rows:
-        raise ValueError("Evaluation records are empty.")
+def make_pipeline(trees: int = 100) -> Pipeline:
+    """Same sklearn model settings as the reference notebook."""
+    return Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("model", RandomForestClassifier(
+            n_estimators=trees, random_state=42,
+            class_weight="balanced", n_jobs=-1,
+        )),
+    ])
+
+
+def evaluate(y_true, predictions, probabilities, model_classes) -> dict:
+    """Metrics on the untouched holdout; confidences are NOT calibrated."""
+    detail = classification_report(
+        y_true, predictions, labels=ACTIONS, output_dict=True, zero_division=0,
+    )
+    matrix = confusion_matrix(y_true, predictions, labels=ACTIONS)
     confusion = {
-        actual: {predicted: 0 for predicted in ACTIONS} for actual in ACTIONS
+        actual: {predicted: int(matrix[i, j]) for j, predicted in enumerate(ACTIONS)}
+        for i, actual in enumerate(ACTIONS)
     }
-    for row in rows:
-        predicted, _, _ = predict(model, row["features"])
-        confusion[row["action"]][predicted] += 1
-    per_class = {}
-    f1_scores = []
-    correct = 0
-    for action in ACTIONS:
-        tp = confusion[action][action]
-        correct += tp
-        support = sum(confusion[action].values())
-        predicted_count = sum(confusion[actual][action] for actual in ACTIONS)
-        precision = tp / predicted_count if predicted_count else 0.0
-        recall = tp / support if support else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-        per_class[action] = {
-            "precision": precision,
-            "recall": recall,
-            "f1_score": f1,
-            "support": support,
-        }
-        if support:
-            f1_scores.append(f1)
-    return {
-        "test_size": len(rows),
-        "accuracy": correct / len(rows),
-        "macro_f1_including_classes_present_in_test": (
-            sum(f1_scores) / len(f1_scores) if f1_scores else 0.0
-        ),
-        "per_class": per_class,
-        "confusion_matrix": confusion,
-    }
-
-
-def select_training_rows(
-    rows: list[dict],
-    strategy: str,
-    max_total: int,
-    target_per_class: int,
-    seed: int,
-) -> list[dict]:
-    if strategy == "proportional_sample":
-        return original_distribution_sample(rows, max_total=max_total, seed=seed)
-    if strategy == "capped_oversampling":
-        return capped_resampling(
-            rows, target_per_class=target_per_class,
-            max_repeat_factor=3, seed=seed
+    probabilities = np.asarray(probabilities, dtype=float)
+    truth = np.asarray(y_true)
+    class_to_index = {str(c): i for i, c in enumerate(model_classes)}
+    true_one_hot = np.zeros_like(probabilities)
+    for row, label in enumerate(truth):
+        true_one_hot[row, class_to_index[str(label)]] = 1.
+    multiclass_brier = float(np.mean(np.sum(
+        (probabilities - true_one_hot) ** 2, axis=1,
+    )))
+    confidence = probabilities.max(axis=1)
+    correct = (np.asarray(predictions) == truth)
+    ece = 0.
+    for lower in np.linspace(0, 1, 11)[:-1]:
+        upper = lower + .1
+        membership = (confidence >= lower) & (
+            confidence <= upper if upper >= 1 else confidence < upper
         )
-    raise ValueError(f"Unknown resampling strategy: {strategy}")
+        if membership.any():
+            ece += float(membership.mean() * abs(
+                confidence[membership].mean() - correct[membership].mean()
+            ))
+    return {
+        "test_size": int(len(truth)),
+        "accuracy": float(accuracy_score(y_true, predictions)),
+        "macro_f1": float(f1_score(y_true, predictions, labels=ACTIONS, average="macro", zero_division=0)),
+        "per_class": {
+            action: {
+                "precision": float(detail[action]["precision"]),
+                "recall": float(detail[action]["recall"]),
+                "f1_score": float(detail[action]["f1-score"]),
+                "support": int(detail[action]["support"]),
+            }
+            for action in ACTIONS
+        },
+        "confusion_matrix": confusion,
+        "calibration_diagnostics": {
+            "ece_10_bins": ece,
+            "multiclass_brier_score": multiclass_brier,
+            "probabilities_calibrated": False,
+        },
+    }
 
 
 def main() -> None:
@@ -92,149 +103,120 @@ def main() -> None:
     parser.add_argument(
         "--dataset", type=Path,
         default=CLEANED_DATA_PATH if CLEANED_DATA_PATH.is_file() else ORIGINAL_DATA_PATH,
-        help="Input UCI-compatible CSV; defaults to data/log2_cleaned.csv if present.",
+        help="UCI-style CSV (defaults to classmate's cleaned CSV).",
     )
+    parser.add_argument("--validate-only", action="store_true", help="Only audit dataset.")
+    parser.add_argument("--trees", type=int, default=100, help="Forest trees (Colab: 100).")
     parser.add_argument(
-        "--validate-only", action="store_true",
-        help="Audit and clean dataset without training; write data_quality_report.json.",
-    )
-    parser.add_argument(
-        "--trees", type=int, default=13,
-        help="Trees in every candidate and final Random Forest (default: 13).",
-    )
-    parser.add_argument(
-        "--max-total", type=int, default=2400,
-        help="Maximum training observations for prevalence-proportional candidate.",
-    )
-    parser.add_argument(
-        "--target-per-class", type=int, default=600,
-        help="Target per class for capped-resampling candidate (repeats at most 3x).",
+        "--cv-folds", type=int, default=5,
+        help="Training-only stratified cross-validation folds (0 to skip; Colab: 5).",
     )
     args = parser.parse_args()
-    if args.trees < 1 or args.max_total < len(ACTIONS) or args.target_per_class < 1:
-        parser.error("trees, max-total and target-per-class must be positive.")
+    if args.trees < 1 or args.cv_folds not in (0, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+        parser.error("--trees must be positive; --cv-folds must be 0 or 2–10.")
 
     rows, counts, quality = load_dataset(args.dataset)
     QUALITY_PATH.parent.mkdir(parents=True, exist_ok=True)
     QUALITY_PATH.write_text(json.dumps(quality, indent=2), encoding="utf-8")
-    print(f"Dataset: {args.dataset} | raw rows: {quality['raw_rows']:,} "
-          f"| cleaned rows: {len(rows):,}")
     print(
-        f"Invalid rows: {quality['excluded_invalid_rows']:,} | "
-        f"exact duplicates removed: {quality['exact_duplicate_rows_removed']:,} | "
-        f"conflicting feature groups: {quality['conflicting_feature_groups']:,} "
-        f"({quality['conflicting_feature_rows_removed']:,} rows removed)"
+        f"Source: {args.dataset.name}; original rows: {quality['raw_rows']:,}; "
+        f"retained: {len(rows):,}; duplicate conflicts quarantined: "
+        f"{quality['conflicting_feature_rows_removed']:,}"
     )
-    print("Class counts after cleaning:", dict(counts))
     if args.validate_only:
-        print(f"Quality report saved: {QUALITY_PATH}")
+        print(f"Data quality report: {QUALITY_PATH}")
         return
 
-    train, validation, test = split_train_validation_test(rows, seed=42)
-    print(
-        f"Split: training={len(train):,}, validation={len(validation):,}, "
-        f"held-out test={len(test):,}"
+    X = pd.DataFrame(
+        [row["features"] for row in rows], columns=FEATURE_NAMES, dtype=float,
     )
-    print("The untouched test set is excluded from all sampling and model selection.")
-
-    validation_candidates = {}
-    strategies = ("proportional_sample", "capped_oversampling")
-    for strategy in strategies:
-        sample = select_training_rows(
-            train, strategy, args.max_total, args.target_per_class, seed=42
+    y = pd.Series([row["action"] for row in rows], name="action")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y,
+    )
+    # This check is important because classmate's CSV contains conflicting
+    # labels on identical feature vectors, resolved BEFORE the split.
+    train_keys = {tuple(row) for row in X_train.itertuples(index=False, name=None)}
+    test_keys = {tuple(row) for row in X_test.itertuples(index=False, name=None)}
+    if train_keys & test_keys:
+        raise ValueError("Identical feature vectors appear in both splits.")
+    print(f"Train: {len(X_train):,}; held-out test: {len(X_test):,}")
+    pipeline = make_pipeline(args.trees)
+    cv = None
+    if args.cv_folds:
+        print(f"Evaluating {args.cv_folds}-fold stratified CV on training data only...")
+        splitter = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=42)
+        scores = cross_validate(
+            pipeline, X_train, y_train, cv=splitter,
+            scoring={"accuracy": "accuracy", "macro_f1": "f1_macro"},
+            n_jobs=1, error_score="raise",
         )
-        print(f"\nCandidate: {strategy} | training rows: {len(sample):,} "
-              f"| class counts: {dict(Counter(r['action'] for r in sample))}")
-        candidate = train_forest(sample, tree_count=args.trees, max_depth=6, seed=42)
-        metrics = evaluation_metrics(validation, candidate)
-        validation_candidates[strategy] = {
-            "training_rows": len(sample),
-            "training_class_counts": dict(Counter(r["action"] for r in sample)),
-            "metrics": metrics,
+        cv = {
+            "folds": args.cv_folds,
+            "accuracy_scores": [float(x) for x in scores["test_accuracy"]],
+            "mean_accuracy": float(np.mean(scores["test_accuracy"])),
+            "macro_f1_scores": [float(x) for x in scores["test_macro_f1"]],
+            "mean_macro_f1": float(np.mean(scores["test_macro_f1"])),
         }
         print(
-            f"Validation macro-F1={metrics['macro_f1_including_classes_present_in_test']:.4f}; "
-            f"accuracy={metrics['accuracy']:.4f}"
+            f"Training CV accuracy: {cv['mean_accuracy']:.4%}, "
+            f"macro F1: {cv['mean_macro_f1']:.4f}"
         )
-
-    # Validation macro-F1 is primary. Tie favours prevalence-proportional
-    # sampling because it repeats fewer rare-class records.
-    selected = max(
-        strategies,
-        key=lambda strategy: (
-            validation_candidates[strategy]["metrics"][
-                "macro_f1_including_classes_present_in_test"
-            ],
-            strategy == "proportional_sample",
-        ),
-    )
-    print(f"\nSelected on validation only: {selected}")
-    development = train + validation
-    final_sample = select_training_rows(
-        development, selected, args.max_total, args.target_per_class, seed=142
-    )
-    model = train_forest(final_sample, tree_count=args.trees, max_depth=6, seed=142)
-    model.update({
-        "training_source": f"UCI Internet Firewall Data DOI {DATASET_DOI}",
-        "dataset_file": args.dataset.name,
-        "dataset_rows_raw": quality["raw_rows"],
-        "dataset_rows_after_cleaning": len(rows),
-        "development_rows_before_sampling": len(development),
-        "training_rows_after_sampling": len(final_sample),
-        "training_class_counts": dict(Counter(r["action"] for r in final_sample)),
-        "test_rows": len(test),
-        "resampling_strategy": selected,
-        "warning": (
-            "Educational classifier on historical UCI firewall records, "
-            "not a live enforcement engine. Reset-Both is shown as Reset. "
-            "Class probabilities are uncalibrated, especially after resampling."
-        ),
-    })
-    test_metrics = evaluation_metrics(test, model)
+    print("Training the scikit-learn Random Forest pipeline...")
+    pipeline.fit(X_train, y_train)
+    predicted = pipeline.predict(X_test)
+    probabilities = pipeline.predict_proba(X_test)
+    metrics = evaluate(y_test, predicted, probabilities, pipeline.classes_)
     report = {
-        "dataset": "UCI Internet Firewall Data",
+        "dataset": DATASET_NAME,
         "dataset_doi": DATASET_DOI,
         "dataset_file": args.dataset.name,
+        "implementation": "scikit-learn Pipeline(SimpleImputer, RandomForestClassifier)",
+        "model_parameters": {
+            "n_estimators": args.trees,
+            "random_state": 42,
+            "class_weight": "balanced",
+            "imputer_strategy": "median",
+        },
         "quality_report": quality,
-        "train_split_size": len(train),
-        "validation_split_size": len(validation),
-        "test_split_size": len(test),
-        "validation_candidates": validation_candidates,
-        "selected_resampling_strategy": selected,
-        "model_trees": args.trees,
-        "development_rows_before_sampling": len(development),
-        "final_training_rows": len(final_sample),
-        "final_training_class_counts": model["training_class_counts"],
-        "test_set_kept_original_class_proportions": True,
-        "test_metrics": test_metrics,
-        **test_metrics,
+        "train_split_size": len(X_train),
+        "test_split_size": len(X_test),
+        "training_class_counts": dict(Counter(y_train)),
+        "test_class_counts": dict(Counter(y_test)),
+        "cross_validation": cv,
+        **metrics,
         "warning": (
-            "Test data were excluded from model selection, sampling and training. "
-            "A single stratified holdout does not prove cross-network generalization. "
-            "Reset metrics have small support, and predicted probabilities are "
-            "uncalibrated. Cleaned CSV provenance is not independently verified."
+            "Not calibrated probabilities; accuracy and CV are evaluated on the "
+            "provided historical CSV only. Rare Reset support is small. "
+            "Classmate's cleaned CSV provenance is not fully reproducible."
         ),
     }
-    save_model(model, MODEL_PATH)
+    # Save fitted pipeline and ordered feature names together. Joblib is
+    # trusted local data only; never load arbitrary uploaded pickle files.
+    bundle = {
+        "pipeline": pipeline,
+        "feature_names": FEATURE_NAMES,
+        "dataset_name": DATASET_NAME,
+        "dataset_file": args.dataset.name,
+        "training_class_counts": report["training_class_counts"],
+        "warning": report["warning"],
+    }
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(bundle, MODEL_PATH)
     REPORT_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print("\nHELD-OUT TEST (never used to select the sampling policy):")
-    print(f"Accuracy: {test_metrics['accuracy']:.4f}")
-    print(f"Macro F1: {test_metrics['macro_f1_including_classes_present_in_test']:.4f}")
+    print(f"Held-out accuracy: {metrics['accuracy']:.4%}")
+    print(f"Held-out macro F1: {metrics['macro_f1']:.4f}")
     for action in ACTIONS:
-        scores = test_metrics["per_class"][action]
-        print(
-            f"{action:5} support={scores['support']:5d} "
-            f"precision={scores['precision']:.3f} "
-            f"recall={scores['recall']:.3f} F1={scores['f1_score']:.3f}"
-        )
-    print(f"Saved model: {MODEL_PATH}")
-    print(f"Saved evaluation report: {REPORT_PATH}")
-    print(f"Saved data quality report: {QUALITY_PATH}")
+        c = metrics["per_class"][action]
+        print(f"  {action:5s} precision={c['precision']:.3f}, "
+              f"recall={c['recall']:.3f}, F1={c['f1_score']:.3f}, support={c['support']}")
+    print(f"Uncalibrated ECE (10 bins): {metrics['calibration_diagnostics']['ece_10_bins']:.4f}")
+    print(f"Model: {MODEL_PATH}")
+    print(f"Reports: {REPORT_PATH} and {QUALITY_PATH}")
 
 
 if __name__ == "__main__":
     try:
         main()
     except (FileNotFoundError, ValueError) as exc:
-        print(f"ERROR: {exc}")
-        raise SystemExit(1)
+        raise SystemExit(f"ERROR: {exc}") from exc

@@ -13,7 +13,7 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from forest_model import ACTIONS, FEATURE_NAMES
+from model_service import ACTIONS, FEATURE_NAMES
 
 CSV_TO_FEATURE = {
     "source_port": "source_port",

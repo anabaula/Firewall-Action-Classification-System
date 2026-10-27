@@ -1,25 +1,32 @@
-Firewall Action Classification System - current project structure
+Firewall Action Classification System — NetSentry (scikit-learn)
 
-app.py                          Flask prediction API and website
-forest_model.py                 Educational pure-Python Random Forest
-data_pipeline.py                Validates data, removes contradictions, splits safely
-train_model.py                  Validation-based selection and held-out evaluation
-requirements.txt               Flask only (website/runtime)
-data/log2_cleaned.csv           Classmate-provided dataset (included)
-data/log2.csv                   Optional original UCI file (not included)
-data/data_quality_report.json   Generated audit of data-quality decisions
-data/evaluation_report.json     Generated validation and test-set metrics
-model/firewall_random_forest.json  Generated deployable custom JSON model
-notebooks/DataCleaning.ipynb    Classmate's exploratory scikit-learn notebook
-tests/test_preprocessing.py     Standard-library regression tests
-templates/index.html            Web interface
-static/style.css                Website styling
-static/app.js                   Dashboard and browser-local prediction history
-setup_project.bat               Creates .venv and installs Flask
-train_model.bat                 Trains on cleaned CSV (or original fallback)
-start_website.bat               Starts local Flask website after training
-verify_project.bat              Checks supporting project files
+Main source:
+  app.py                          Flask prediction API and site
+  model_service.py                Loads trusted joblib sklearn model / predicts
+  data_pipeline.py                Dataset validation, deduplication, split hygiene
+  train_model.py                  sklearn Pipeline training, CV and metrics
+  requirements.txt               Flask, pandas, scikit-learn, joblib
 
-The supplied notebook is reference material; the Flask app does not load
-its scikit-learn pickle model. Read README.md for setup, methodological
-limitations, and preprocessing details.
+Inputs and generated files:
+  data/log2_cleaned.csv           Classmate supplied cleaned dataset (committed)
+  data/log2.csv                   Optional original UCI file (not included)
+  data/data_quality_report.json   Generated data quality report (Git ignored)
+  data/evaluation_report.json     Generated evaluation metrics (Git ignored)
+  model/firewall_random_forest.joblib  Generated sklearn Pipeline (Git ignored)
+
+Supporting files:
+  notebooks/DataCleaning.ipynb    Classmate's Colab reference (unchanged)
+  tests/test_preprocessing.py     Cleaning and split unit tests
+  tests/test_api.py               Flask endpoint unit tests
+  tests/test_model_service.py     scikit-learn model roundtrip tests
+  templates/index.html            NetSentry web interface
+  static/style.css                Responsive dark-themed UI
+  static/app.js                   Browser-based prediction history
+  setup_project.bat               Create venv and install Python dependencies
+  train_model.bat                 Train sklearn model
+  start_website.bat               Start Flask website
+  verify_project.bat              Check required files
+
+The original pure-Python Random Forest is no longer used. The notebook and
+website share the sklearn RandomForestClassifier configuration but still differ
+in cleaning and test records. Read README.md before citing accuracy or confidence.

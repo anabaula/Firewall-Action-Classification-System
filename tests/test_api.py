@@ -6,14 +6,25 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import patch
-from app import app
-from forest_model import ACTIONS, FEATURE_NAMES
+import pandas as pd
+from sklearn.dummy import DummyClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 
+from app import app
+from model_service import ACTIONS, FEATURE_NAMES
+
+# Real scikit-learn pipeline with a deterministic prediction for API tests.
+_X = pd.DataFrame([[i + 1] * len(FEATURE_NAMES) for i in range(4)], columns=FEATURE_NAMES)
+TEST_PIPELINE = Pipeline([
+    ("imputer", SimpleImputer(strategy="median")),
+    ("model", DummyClassifier(strategy="constant", constant="Allow")),
+])
+TEST_PIPELINE.fit(_X, ACTIONS)
 TEST_MODEL = {
     "dataset_name": "UCI Internet Firewall Data",
-    "classes": ACTIONS,
-    "features": FEATURE_NAMES,
-    "trees": [{"probs": {"Allow": 1.0, "Deny": 0.0, "Drop": 0.0, "Reset": 0.0}}],
+    "feature_names": FEATURE_NAMES,
+    "pipeline": TEST_PIPELINE,
 }
 VALID = {
     "source_port": 51426,

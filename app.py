@@ -1,10 +1,10 @@
 from pathlib import Path
 import math
 from flask import Flask, jsonify, render_template, request
-from forest_model import ACTIONS, FEATURE_NAMES, load_model, predict
+from model_service import ACTIONS, FEATURE_NAMES, load_model, predict
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_PATH = BASE_DIR / "model" / "firewall_random_forest.json"
+MODEL_PATH = BASE_DIR / "model" / "firewall_random_forest.joblib"
 
 ACTION_DETAILS = {
     "Allow": {"description": "The model predicts this record resembles firewall traffic labeled Allow in the training data.", "explanation": "This is a prediction from historical records, not a live firewall rule or a security guarantee."},
@@ -72,7 +72,7 @@ def predict_route():
             "confidence": confidence,
             "description": details["description"],
             "explanation": details["explanation"],
-            "model_type": "Random Forest Classifier (pure Python)",
+            "model_type": "scikit-learn RandomForestClassifier",
             "dataset": model.get("dataset_name", "UCI Internet Firewall Data"),
             "is_synthetic_demo_model": False,
         })

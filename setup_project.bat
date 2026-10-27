@@ -25,7 +25,7 @@ if errorlevel 1 goto failed
 if errorlevel 1 goto failed
 echo.
 echo SUCCESS: setup is ready.
-echo Next, copy log2.csv into the data folder, then run train_model.bat.
+echo Next, run train_model.bat using the included data\log2_cleaned.csv.
 pause
 exit /b 0
 :failed

@@ -6,5 +6,7 @@ __pycache__/
 data/log2.csv
 # Generated model and report are recreated by train_model.py.
 model/firewall_random_forest.json
+model/firewall_random_forest.joblib
+model/*.pkl
 data/evaluation_report.json
 data/data_quality_report.json

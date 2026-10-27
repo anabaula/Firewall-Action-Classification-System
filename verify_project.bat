@@ -6,7 +6,7 @@ echo Verify Firewall Action Classification Project
 echo Project root: %CD%
 echo ================================================
 call :check "app.py" required
-call :check "forest_model.py" required
+call :check "model_service.py" required
 call :check "data_pipeline.py" required
 call :check "train_model.py" required
 call :check "tests\test_preprocessing.py" required
@@ -22,7 +22,7 @@ if exist "data\log2_cleaned.csv" (
 ) else (
   echo [MISSING] data\log2_cleaned.csv or data\log2.csv
 )
-call :check "model\firewall_random_forest.json" trained-model
+call :check "model\firewall_random_forest.joblib" trained-model
 call :check "data\evaluation_report.json" evaluation-report
 call :check "data\data_quality_report.json" quality-report
 call :check ".venv\Scripts\python.exe" python-environment
