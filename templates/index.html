@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0b1220">
-  <title>FirewallAI | Traffic Classifier</title>
+  <title>NetSentry | Traffic Classifier</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -12,27 +12,27 @@
 </head>
 <body>
   <aside class="sidebar" id="sidebar">
-    <a class="brand" href="#dashboard" aria-label="FirewallAI home">
+    <a class="brand" href="#dashboard" aria-label="NetSentry home">
       <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 27 7v8c0 7-4.7 11.7-11 14C9.7 26.7 5 22 5 15V7l11-4Z"/><path d="m11 16 3.3 3.3L21.5 12"/></svg></span>
-      <span class="brand-copy"><b>Firewall<span>AI</span></b><small>TRAFFIC CLASSIFIER</small></span>
+      <span class="brand-copy"><b>Net<span>Sentry</span></b><small>TRAFFIC CLASSIFIER</small></span>
     </a>
     <div class="nav-caption">WORKSPACE</div>
     <button class="nav-item active" data-page="dashboard"><span class="nav-icon">▦</span> Dashboard</button>
     <button class="nav-item" data-page="classify"><span class="nav-icon">⌁</span> Classify traffic</button>
     <button class="nav-item" data-page="history"><span class="nav-icon">◷</span> Prediction history</button>
-    <div class="sidebar-bottom"><span class="pulse"></span><div><b id="side-status">Checking model…</b><small>Local development environment</small></div></div>
-    <div class="side-foot">STUDENT PROJECT · DEMO BUILD</div>
+
+
   </aside>
 
   <main class="main-area">
     <header class="topbar">
       <button class="mobile-menu" id="mobile-menu" aria-label="Toggle navigation">☰</button>
       <div class="breadcrumb">Workspace <span>/</span> <b id="breadcrumb-current">Dashboard</b></div>
-      <div class="topbar-right"><span class="system-pill"><i></i><span id="header-status">SYSTEM CHECKING</span></span><span class="avatar">FA</span></div>
+      <div class="topbar-right"><span class="system-pill"><i></i><span id="header-status">SYSTEM CHECKING</span></span></div>
     </header>
 
     <section class="page active" id="page-dashboard">
-      <div class="eyebrow"><span class="eyebrow-line"></span> CYBERSECURITY ANALYTICS</div>
+      <div class="eyebrow"><span class="eyebrow-line"></span> ANALYTICS</div>
       <h1>Firewall Traffic <span>Classification</span></h1>
       <p class="page-subtitle">Explore network traffic characteristics and classify the predicted firewall action.</p>
 
@@ -62,7 +62,7 @@
 
       <div class="section-heading history-head"><div><h2>Recent predictions</h2><p>Latest results from your current browser</p></div><button class="text-link" data-go="history">View history <span>→</span></button></div>
       <div class="table-card"><div class="table-scroll"><table><thead><tr><th>TIME</th><th>SOURCE PORT</th><th>DEST. PORT</th><th>PACKETS</th><th>PREDICTED ACTION</th><th>CONFIDENCE</th></tr></thead><tbody id="recent-table"><tr><td class="empty-cell" colspan="6"><div class="empty-icon">⌁</div><b>No predictions yet</b><span>Run your first classification to see results here.</span><button class="text-link" data-go="classify">Start classifying →</button></td></tr></tbody></table></div></div>
-      <div class="disclaimer"><span>ⓘ</span><p><b>Educational demo only.</b> This prototype does not control a real firewall. The model is trained on the public UCI Internet Firewall Data dataset; its predictions are not guarantees for live traffic.</p></div>
+
     </section>
 
     <section class="page" id="page-classify">
@@ -112,7 +112,7 @@
       <div class="history-note"><span>ⓘ</span> History is stored in your browser's local storage. Clearing browser data may remove it. This is not a permanent or shared database.</div>
     </section>
 
-    <footer class="page-footer"><span>FirewallAI <b>·</b> Student project prototype</span><span>Python Flask + Pure-Python Random Forest</span></footer>
+
   </main>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

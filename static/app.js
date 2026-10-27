@@ -35,11 +35,11 @@ async function checkModelStatus() {
     const response = await fetch('/api/health');
     const health = await response.json();
     const ready = health.model_ready;
-    document.getElementById('side-status').textContent = ready ? 'Model ready' : 'Model not trained';
+
     document.getElementById('header-status').textContent = ready ? 'MODEL READY' : 'MODEL NOT TRAINED';
     document.querySelector('.system-pill').classList.toggle('warning', !ready);
   } catch {
-    document.getElementById('side-status').textContent = 'API unavailable';
+
     document.getElementById('header-status').textContent = 'API UNAVAILABLE';
     document.querySelector('.system-pill').classList.add('warning');
   }
