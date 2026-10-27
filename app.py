@@ -42,8 +42,10 @@ def predict_route():
         return jsonify({"error": "Could not read the submitted form. Please try again."}), 400
     try:
         values = {}
-        integer_fields = {"source_port", "destination_port", "nat_source_port", "nat_destination_port", "total_packets", "forward_packets", "backward_packets"}
+        integer_fields = {"source_port", "destination_port", "nat_source_port", "nat_destination_port", "total_bytes", "bytes_sent", "bytes_received", "total_packets", "forward_packets", "backward_packets"}
         for key in FEATURE_NAMES:
+            if isinstance(payload[key], bool):
+                raise ValueError(f"{key.replace('_', ' ').title()} must be a valid number.")
             value = float(payload[key])
             if not math.isfinite(value):
                 raise ValueError(f"{key.replace('_', ' ').title()} must be a valid number.")

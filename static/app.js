@@ -86,9 +86,56 @@ document.getElementById('clear-history').addEventListener('click', () => {
   }
 });
 
+// Accessible, theme-matched number controls; native keyboard input remains intact.
+function updateNumberStepper(input) {
+  const stepper = input.closest('.number-control')?.querySelector('.number-stepper');
+  if (!stepper) return;
+  const value = input.valueAsNumber;
+  const min = input.min === '' ? -Infinity : Number(input.min);
+  const max = input.max === '' ? Infinity : Number(input.max);
+  stepper.querySelector('[data-step="up"]').disabled =
+    input.disabled || input.readOnly || (Number.isFinite(value) && value >= max);
+  stepper.querySelector('[data-step="down"]').disabled =
+    input.disabled || input.readOnly || (Number.isFinite(value) && value <= min);
+}
+
+function adjustNumberInput(input, direction) {
+  if (input.disabled || input.readOnly) return;
+  const min = input.min === '' ? -Infinity : Number(input.min);
+  const max = input.max === '' ? Infinity : Number(input.max);
+  if (input.step === 'any') {
+    // Duration can be fractional; move it by 0.1 seconds.
+    const current = Number.isFinite(input.valueAsNumber)
+      ? input.valueAsNumber : (Number.isFinite(min) ? min : 0);
+    const next = Math.round((current + direction * 0.1) * 1e6) / 1e6;
+    input.value = String(Math.max(min, Math.min(max, next)));
+  } else {
+    if (direction > 0) input.stepUp();
+    else input.stepDown();
+  }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  input.focus({ preventScroll: true });
+}
+
+document.querySelectorAll('.number-control').forEach(control => {
+  const input = control.querySelector('input[type="number"]');
+  control.querySelectorAll('.number-step-button').forEach(button => {
+    button.addEventListener('click', () => adjustNumberInput(
+      input, button.dataset.step === 'up' ? 1 : -1
+    ));
+  });
+  input.addEventListener('input', () => updateNumberStepper(input));
+  input.addEventListener('change', () => updateNumberStepper(input));
+  updateNumberStepper(input);
+});
+
 document.getElementById('traffic-form').addEventListener('reset', () => {
   document.getElementById('form-message').textContent = '';
   document.getElementById('form-message').className = 'form-message';
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.number-control input[type="number"]').forEach(updateNumberStepper);
+  });
 });
 
 document.getElementById('traffic-form').addEventListener('submit', async event => {
