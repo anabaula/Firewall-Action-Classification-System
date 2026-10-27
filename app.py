@@ -36,7 +36,7 @@ def health():
 def predict_route():
     model = load_saved_model()
     if model is None:
-        return jsonify({"error": "The real-dataset model has not been trained yet. Download log2.csv, place it in data/log2.csv, then run: python train_model.py"}), 503
+        return jsonify({"error": "The real-dataset model has not been trained yet. Provide data/log2_cleaned.csv or data/log2.csv and run: python train_model.py"}), 503
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify({"error": "Could not read the submitted form. Please try again."}), 400

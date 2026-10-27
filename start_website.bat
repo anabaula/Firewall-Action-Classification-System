@@ -28,7 +28,7 @@ if not exist "app.py" (
 if not exist "model\firewall_random_forest.json" (
   echo ERROR: The trained model was not found.
   echo Restore model\firewall_random_forest.json or, if necessary,
-  echo copy data\log2.csv into the data folder and run train_model.bat.
+  echo ensure data\log2_cleaned.csv or data\log2.csv exists, then run train_model.bat.
   pause
   exit /b 1
 )

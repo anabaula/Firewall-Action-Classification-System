@@ -7,3 +7,4 @@ data/log2.csv
 # Generated model and report are recreated by train_model.py.
 model/firewall_random_forest.json
 data/evaluation_report.json
+data/data_quality_report.json
