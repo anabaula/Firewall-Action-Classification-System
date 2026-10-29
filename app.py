@@ -13,6 +13,10 @@ ACTION_DETAILS = {
     "Reset": {"description": "The model predicts this record resembles traffic labeled Reset-Both in the training data.", "explanation": "Reset-Both is displayed as Reset. This prediction does not control a real connection."},
 }
 app = Flask(__name__)
+MODEL_LOAD_ERROR = (
+    "The trained model could not be loaded. Run train_model.bat to retrain it, "
+    "then restart NetSentry."
+)
 
 
 def load_saved_model():
@@ -26,15 +30,24 @@ def index():
 
 @app.get("/api/health")
 def health():
-    ready = MODEL_PATH.exists()
-    model = load_saved_model() if ready else None
+    try:
+        model = load_saved_model()
+    except Exception:
+        app.logger.exception("Failed to load the NetSentry model during health check")
+        return jsonify({"status": "model_error", "model_ready": False,
+                        "error": MODEL_LOAD_ERROR}), 503
+    ready = model is not None
     return jsonify({"status": "ready" if ready else "model_missing", "model_ready": ready,
                     "dataset": (model or {}).get("dataset_name", "UCI Internet Firewall Data")})
 
 
 @app.post("/api/predict")
 def predict_route():
-    model = load_saved_model()
+    try:
+        model = load_saved_model()
+    except Exception:
+        app.logger.exception("Failed to load the NetSentry model for prediction")
+        return jsonify({"error": MODEL_LOAD_ERROR}), 503
     if model is None:
         return jsonify({"error": "The real-dataset model has not been trained yet. Provide data/log2_cleaned.csv or data/log2.csv and run: python train_model.py"}), 503
     payload = request.get_json(silent=True)

@@ -112,6 +112,41 @@ class PredictionAPITests(unittest.TestCase):
             response = self.client.post("/api/predict", json=VALID)
         self.assertEqual(response.status_code, 503)
 
+    def test_unreadable_model_returns_json_service_unavailable(self):
+        # Simulate an unreadable/corrupt saved model, without touching real artifacts.
+        with patch("app.load_saved_model", side_effect=OSError("private filesystem path")), \
+             patch.object(app.logger, "exception") as log_error:
+            health = self.client.get("/api/health")
+            prediction = self.client.post("/api/predict", json=VALID)
+
+        self.assertEqual(health.status_code, 503)
+        self.assertTrue(health.is_json)
+        self.assertEqual(health.get_json()["status"], "model_error")
+        self.assertFalse(health.get_json()["model_ready"])
+        self.assertIn("retrain", health.get_json()["error"])
+        self.assertNotIn("private filesystem path", health.get_data(as_text=True))
+
+        self.assertEqual(prediction.status_code, 503)
+        self.assertTrue(prediction.is_json)
+        self.assertIn("retrain", prediction.get_json()["error"])
+        self.assertNotIn("private filesystem path", prediction.get_data(as_text=True))
+        self.assertEqual(log_error.call_count, 2)
+
+    def test_invalid_model_metadata_returns_json_service_unavailable(self):
+        with patch("app.load_saved_model", side_effect=ValueError("bad metadata")), \
+             patch.object(app.logger, "exception"):
+            response = self.client.post("/api/predict", json=VALID)
+        self.assertEqual(response.status_code, 503)
+        self.assertTrue(response.is_json)
+        self.assertNotIn("bad metadata", response.get_data(as_text=True))
+
+    def test_health_reports_missing_model(self):
+        with patch("app.load_saved_model", return_value=None):
+            response = self.client.get("/api/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.get_json()["model_ready"])
+        self.assertEqual(response.get_json()["status"], "model_missing")
+
     def test_homepage_and_static_resources(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
