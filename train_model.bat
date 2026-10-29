@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 echo ================================================
-echo Train Random Forest from UCI log2.csv
+echo Train Random Forest from validated UCI-style data
 echo ================================================
 if not exist ".venv\Scripts\python.exe" (
   echo ERROR: Virtual environment not found.
@@ -10,19 +10,19 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-if not exist "data\log2.csv" (
-  echo ERROR: data\log2.csv was not found.
-  echo Copy the original UCI log2.csv into this project's data folder.
+if not exist "data\log2_cleaned.csv" if not exist "data\log2.csv" (
+  echo ERROR: No input dataset was found.
+  echo Provide data\log2_cleaned.csv or data\log2.csv.
   pause
   exit /b 1
 )
 ".venv\Scripts\python.exe" train_model.py
 if errorlevel 1 (
   echo.
-  echo Training failed. Copy the error text and ask for help.
+  echo ERROR: Data validation or model training failed. Review the output.
   pause
   exit /b 1
 )
 echo.
-echo SUCCESS: model and evaluation report were generated.
+echo SUCCESS: model, evaluation report, and quality report generated.
 pause

@@ -1,236 +1,222 @@
-"""Train a pure-Python Random Forest on the real UCI Internet Firewall Data.
+"""Train NetSentry with scikit-learn, following the classmate's Colab approach.
 
-Before running, download the UCI dataset archive and place its log2.csv file at:
-    data/log2.csv
-
-No NumPy, SciPy, pandas, scikit-learn, or joblib is required. The rare Reset-Both
-class is extremely underrepresented in the source data; this script oversamples
-that class in the TRAINING set only and reports metrics against a held-out split
-that retains the source class distribution.
+Validated UCI data -> 80/20 stratified split -> median imputer and
+100-tree RandomForestClassifier(class_weight="balanced") -> held-out evaluation.
+Five-fold CV uses training data only; held-out test data is never trained on.
 """
 from __future__ import annotations
-import csv
+
+import argparse
 import json
-import math
-import random
-import re
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
-from forest_model import ACTIONS, FEATURE_NAMES, predict, save_model, train_forest
+
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import (
+    accuracy_score, classification_report, confusion_matrix, f1_score,
+)
+from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
+from sklearn.pipeline import Pipeline
+
+from data_pipeline import load_dataset
+from model_service import ACTIONS, DATASET_NAME, FEATURE_NAMES
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = BASE_DIR / "data" / "log2.csv"
-MODEL_PATH = BASE_DIR / "model" / "firewall_random_forest.json"
+CLEANED_DATA_PATH = BASE_DIR / "data" / "log2_cleaned.csv"
+ORIGINAL_DATA_PATH = BASE_DIR / "data" / "log2.csv"
+MODEL_PATH = BASE_DIR / "model" / "firewall_random_forest.joblib"
 REPORT_PATH = BASE_DIR / "data" / "evaluation_report.json"
-
-# Maps the UCI source columns to the input feature fields used by this website.
-CSV_TO_FEATURE = {
-    "source_port": "source_port",
-    "destination_port": "destination_port",
-    "nat_source_port": "nat_source_port",
-    "nat_destination_port": "nat_destination_port",
-    "bytes": "total_bytes",
-    "bytes_sent": "bytes_sent",
-    "bytes_received": "bytes_received",
-    "packets": "total_packets",
-    "elapsed_time_sec": "connection_duration",
-    "pkts_sent": "forward_packets",
-    "pkts_received": "backward_packets",
-}
+QUALITY_PATH = BASE_DIR / "data" / "data_quality_report.json"
+DATASET_DOI = "10.24432/C5131M"
 
 
-def norm_header(value: str) -> str:
-    value = value.strip().lower()
-    value = re.sub(r"[^a-z0-9]+", "_", value)
-    return value.strip("_")
+def make_pipeline(trees: int = 100) -> Pipeline:
+    """Same sklearn model settings as the reference notebook."""
+    return Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("model", RandomForestClassifier(
+            n_estimators=trees, random_state=42,
+            class_weight="balanced", n_jobs=-1,
+        )),
+    ])
 
 
-def normalize_action(value: str) -> str | None:
-    label = value.strip().lower().replace("_", "-").replace(" ", "-")
-    if label in {"allow", "deny", "drop"}:
-        return label.title()
-    if label in {"reset-both", "reset", "reset-client", "reset-server"}:
-        return "Reset"
-    # Some mirrors/documentation have inconsistently called the deny category "action".
-    if label == "action":
-        return "Deny"
-    return None
-
-
-def load_dataset(path: Path) -> tuple[list[dict], Counter, Counter]:
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Dataset file not found: {path}\nDownload the UCI Internet Firewall Data ZIP, extract log2.csv, "
-            f"and place it in the project's data folder as data\\log2.csv."
+def evaluate(y_true, predictions, probabilities, model_classes) -> dict:
+    """Metrics on the untouched holdout; confidences are NOT calibrated."""
+    detail = classification_report(
+        y_true, predictions, labels=ACTIONS, output_dict=True, zero_division=0,
+    )
+    matrix = confusion_matrix(y_true, predictions, labels=ACTIONS)
+    confusion = {
+        actual: {predicted: int(matrix[i, j]) for j, predicted in enumerate(ACTIONS)}
+        for i, actual in enumerate(ACTIONS)
+    }
+    probabilities = np.asarray(probabilities, dtype=float)
+    truth = np.asarray(y_true)
+    class_to_index = {str(c): i for i, c in enumerate(model_classes)}
+    true_one_hot = np.zeros_like(probabilities)
+    for row, label in enumerate(truth):
+        true_one_hot[row, class_to_index[str(label)]] = 1.
+    multiclass_brier = float(np.mean(np.sum(
+        (probabilities - true_one_hot) ** 2, axis=1,
+    )))
+    confidence = probabilities.max(axis=1)
+    correct = (np.asarray(predictions) == truth)
+    ece = 0.
+    for lower in np.linspace(0, 1, 11)[:-1]:
+        upper = lower + .1
+        membership = (confidence >= lower) & (
+            confidence <= upper if upper >= 1 else confidence < upper
         )
-    rows = []
-    bad_rows = 0
-    source_counts = Counter()
-    required = set(CSV_TO_FEATURE) | {"action"}
-    with path.open("r", newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        if not reader.fieldnames:
-            raise ValueError("The CSV appears to have no header row. Use the original UCI log2.csv file.")
-        header_map = {norm_header(h): h for h in reader.fieldnames}
-        # UCI calls the time field 'Elapsed Time (sec)', normalized to elapsed_time_sec.
-        missing = sorted(required - set(header_map))
-        if missing:
-            raise ValueError(
-                "The CSV columns do not match the expected UCI dataset. Missing: " + ", ".join(missing) +
-                ". Make sure you extracted the original log2.csv, not a different file."
-            )
-        for raw in reader:
-            action = normalize_action(raw[header_map["action"]] or "")
-            if action not in ACTIONS:
-                bad_rows += 1
-                continue
-            try:
-                features = []
-                for feature_name in FEATURE_NAMES:
-                    # Translate the UI/model feature name back to its UCI column name.
-                    source_name = next(k for k, v in CSV_TO_FEATURE.items() if v == feature_name)
-                    raw_value = (raw[header_map[source_name]] or "").strip().replace(",", "")
-                    number = float(raw_value)
-                    if not math.isfinite(number):
-                        raise ValueError("non-finite number")
-                    features.append(number)
-            except (TypeError, ValueError, KeyError, StopIteration):
-                bad_rows += 1
-                continue
-            rows.append({"features": features, "action": action})
-            source_counts[action] += 1
-    if not rows:
-        raise ValueError("No usable records were found in log2.csv.")
-    return rows, source_counts, Counter({"bad_or_ignored_rows": bad_rows})
-
-
-def stratified_split(rows: list[dict], seed: int = 42) -> tuple[list[dict], list[dict]]:
-    rng = random.Random(seed)
-    grouped = defaultdict(list)
-    for row in rows:
-        grouped[row["action"]].append(row)
-    train, test = [], []
-    for action in ACTIONS:
-        group = grouped[action][:]
-        rng.shuffle(group)
-        if len(group) < 2:
-            train.extend(group)
-            continue
-        test_count = max(1, round(len(group) * 0.20))
-        test.extend(group[:test_count])
-        train.extend(group[test_count:])
-    rng.shuffle(train)
-    rng.shuffle(test)
-    return train, test
-
-
-def balance_training_only(train_rows: list[dict], target_per_class: int = 600, seed: int = 42) -> list[dict]:
-    rng = random.Random(seed)
-    grouped = defaultdict(list)
-    for row in train_rows:
-        grouped[row["action"]].append(row)
-    balanced = []
-    for action in ACTIONS:
-        group = grouped[action]
-        if not group:
-            print(f"WARNING: no training examples for {action}; model cannot learn this class.")
-            continue
-        if len(group) >= target_per_class:
-            chosen = rng.sample(group, target_per_class)
-        else:
-            chosen = group[:] + [rng.choice(group) for _ in range(target_per_class - len(group))]
-        balanced.extend({"features": row["features"][:], "action": action} for row in chosen)
-    rng.shuffle(balanced)
-    return balanced
-
-
-def evaluation_metrics(test_rows: list[dict], model: dict) -> dict:
-    confusion = {actual: {predicted: 0 for predicted in ACTIONS} for actual in ACTIONS}
-    correct = 0
-    for row in test_rows:
-        predicted, _, _ = predict(model, row["features"])
-        confusion[row["action"]][predicted] += 1
-        correct += predicted == row["action"]
-    per_class = {}
-    f1_values = []
-    for action in ACTIONS:
-        tp = confusion[action][action]
-        support = sum(confusion[action].values())
-        predicted_count = sum(confusion[actual][action] for actual in ACTIONS)
-        precision = tp / predicted_count if predicted_count else 0.0
-        recall = tp / support if support else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-        per_class[action] = {"precision": precision, "recall": recall, "f1_score": f1, "support": support}
-        if support:
-            f1_values.append(f1)
-    total = max(1, len(test_rows))
+        if membership.any():
+            ece += float(membership.mean() * abs(
+                confidence[membership].mean() - correct[membership].mean()
+            ))
     return {
-        "test_size": len(test_rows),
-        "accuracy": correct / total,
-        "macro_f1_including_classes_present_in_test": sum(f1_values) / len(f1_values) if f1_values else 0.0,
-        "per_class": per_class,
+        "test_size": int(len(truth)),
+        "accuracy": float(accuracy_score(y_true, predictions)),
+        "macro_f1": float(f1_score(y_true, predictions, labels=ACTIONS, average="macro", zero_division=0)),
+        "per_class": {
+            action: {
+                "precision": float(detail[action]["precision"]),
+                "recall": float(detail[action]["recall"]),
+                "f1_score": float(detail[action]["f1-score"]),
+                "support": int(detail[action]["support"]),
+            }
+            for action in ACTIONS
+        },
         "confusion_matrix": confusion,
-        "test_set_kept_original_class_proportions": True,
+        "calibration_diagnostics": {
+            "ece_10_bins": ece,
+            "multiclass_brier_score": multiclass_brier,
+            "probabilities_calibrated": False,
+        },
     }
 
 
 def main() -> None:
-    rows, source_counts, skipped = load_dataset(DATA_PATH)
-    print("Dataset: UCI Internet Firewall Data (real firewall log records)")
-    print(f"Usable rows: {len(rows):,}; rows skipped/ignored: {skipped['bad_or_ignored_rows']:,}")
-    print("Original class distribution:")
-    for action in ACTIONS:
-        print(f"  {action:5}: {source_counts[action]:,}")
-    if source_counts["Reset"] < 20:
-        print("WARNING: Reset examples are very rare. Treat Reset metrics as uncertain.")
-
-    train_rows, test_rows = stratified_split(rows)
-    balanced_rows = balance_training_only(train_rows, target_per_class=600)
-    print(f"Training split before balancing: {len(train_rows):,}")
-    print(f"Training examples after class balancing/oversampling: {len(balanced_rows):,}")
-    print(f"Held-out test records (not balanced): {len(test_rows):,}")
-    print("Training pure-Python Random Forest (13 trees)...")
-    model = train_forest(balanced_rows, tree_count=13, max_depth=6, seed=42)
-    model["training_source"] = "UCI Machine Learning Repository: Internet Firewall Data, DOI 10.24432/C5131M"
-    model["source_rows_used"] = len(rows)
-    model["train_original_rows"] = len(train_rows)
-    model["balanced_training_rows"] = len(balanced_rows)
-    model["test_rows"] = len(test_rows)
-    model["original_class_counts"] = dict(source_counts)
-    model["warning"] = (
-        "Trained on UCI Internet Firewall Data. Training data was balanced by undersampling majority classes and "
-        "oversampling the rare Reset class. Evaluation uses an unbalanced stratified holdout. Reset performance may be unstable. "
-        "Educational decision-support prototype only; not for production firewall decisions."
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dataset", type=Path,
+        default=CLEANED_DATA_PATH if CLEANED_DATA_PATH.is_file() else ORIGINAL_DATA_PATH,
+        help="UCI-style CSV (defaults to classmate's cleaned CSV).",
     )
-    metrics = evaluation_metrics(test_rows, model)
+    parser.add_argument("--validate-only", action="store_true", help="Only audit dataset.")
+    parser.add_argument("--trees", type=int, default=100, help="Forest trees (Colab: 100).")
+    parser.add_argument(
+        "--cv-folds", type=int, default=5,
+        help="Training-only stratified cross-validation folds (0 to skip; Colab: 5).",
+    )
+    args = parser.parse_args()
+    if args.trees < 1 or args.cv_folds not in (0, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+        parser.error("--trees must be positive; --cv-folds must be 0 or 2–10.")
+
+    rows, counts, quality = load_dataset(args.dataset)
+    QUALITY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    QUALITY_PATH.write_text(json.dumps(quality, indent=2), encoding="utf-8")
+    print(
+        f"Source: {args.dataset.name}; original rows: {quality['raw_rows']:,}; "
+        f"retained: {len(rows):,}; duplicate conflicts quarantined: "
+        f"{quality['conflicting_feature_rows_removed']:,}"
+    )
+    if args.validate_only:
+        print(f"Data quality report: {QUALITY_PATH}")
+        return
+
+    X = pd.DataFrame(
+        [row["features"] for row in rows], columns=FEATURE_NAMES, dtype=float,
+    )
+    y = pd.Series([row["action"] for row in rows], name="action")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y,
+    )
+    # This check is important because classmate's CSV contains conflicting
+    # labels on identical feature vectors, resolved BEFORE the split.
+    train_keys = {tuple(row) for row in X_train.itertuples(index=False, name=None)}
+    test_keys = {tuple(row) for row in X_test.itertuples(index=False, name=None)}
+    if train_keys & test_keys:
+        raise ValueError("Identical feature vectors appear in both splits.")
+    print(f"Train: {len(X_train):,}; held-out test: {len(X_test):,}")
+    pipeline = make_pipeline(args.trees)
+    cv = None
+    if args.cv_folds:
+        print(f"Evaluating {args.cv_folds}-fold stratified CV on training data only...")
+        splitter = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=42)
+        scores = cross_validate(
+            pipeline, X_train, y_train, cv=splitter,
+            scoring={"accuracy": "accuracy", "macro_f1": "f1_macro"},
+            n_jobs=1, error_score="raise",
+        )
+        cv = {
+            "folds": args.cv_folds,
+            "accuracy_scores": [float(x) for x in scores["test_accuracy"]],
+            "mean_accuracy": float(np.mean(scores["test_accuracy"])),
+            "macro_f1_scores": [float(x) for x in scores["test_macro_f1"]],
+            "mean_macro_f1": float(np.mean(scores["test_macro_f1"])),
+        }
+        print(
+            f"Training CV accuracy: {cv['mean_accuracy']:.4%}, "
+            f"macro F1: {cv['mean_macro_f1']:.4f}"
+        )
+    print("Training the scikit-learn Random Forest pipeline...")
+    pipeline.fit(X_train, y_train)
+    predicted = pipeline.predict(X_test)
+    probabilities = pipeline.predict_proba(X_test)
+    metrics = evaluate(y_test, predicted, probabilities, pipeline.classes_)
     report = {
-        "dataset": "UCI Internet Firewall Data",
-        "dataset_doi": "10.24432/C5131M",
-        "source_rows_used": len(rows),
-        "skipped_or_ignored_rows": skipped["bad_or_ignored_rows"],
-        "original_class_counts": dict(source_counts),
-        "train_original_rows": len(train_rows),
-        "balanced_training_rows": len(balanced_rows),
+        "dataset": DATASET_NAME,
+        "dataset_doi": DATASET_DOI,
+        "dataset_file": args.dataset.name,
+        "implementation": "scikit-learn Pipeline(SimpleImputer, RandomForestClassifier)",
+        "model_parameters": {
+            "n_estimators": args.trees,
+            "random_state": 42,
+            "class_weight": "balanced",
+            "imputer_strategy": "median",
+        },
+        "quality_report": quality,
+        "train_split_size": len(X_train),
+        "test_split_size": len(X_test),
+        "training_class_counts": dict(Counter(y_train)),
+        "test_class_counts": dict(Counter(y_test)),
+        "cross_validation": cv,
         **metrics,
-        "warning": "This is a held-out score on this public dataset, not a guarantee of performance on other networks. Reset is rare in the source data.",
+        "warning": (
+            "Not calibrated probabilities; accuracy and CV are evaluated on the "
+            "provided historical CSV only. Rare Reset support is small. "
+            "Classmate's cleaned CSV provenance is not fully reproducible."
+        ),
     }
-    save_model(model, MODEL_PATH)
+    # Save fitted pipeline and ordered feature names together. Joblib is
+    # trusted local data only; never load arbitrary uploaded pickle files.
+    bundle = {
+        "pipeline": pipeline,
+        "feature_names": FEATURE_NAMES,
+        "dataset_name": DATASET_NAME,
+        "dataset_file": args.dataset.name,
+        "training_class_counts": report["training_class_counts"],
+        "warning": report["warning"],
+    }
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(bundle, MODEL_PATH)
     REPORT_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print("\nEvaluation on held-out records from the real dataset:")
-    print(f"Accuracy: {metrics['accuracy']:.3f}")
-    print(f"Macro F1: {metrics['macro_f1_including_classes_present_in_test']:.3f}")
-    print("Per-class metrics (precision / recall / F1 / support):")
+    print(f"Held-out accuracy: {metrics['accuracy']:.4%}")
+    print(f"Held-out macro F1: {metrics['macro_f1']:.4f}")
     for action in ACTIONS:
-        row = metrics["per_class"][action]
-        print(f"  {action:5}: {row['precision']:.3f} / {row['recall']:.3f} / {row['f1_score']:.3f} / {row['support']}")
-    print(f"Saved model: {MODEL_PATH}")
-    print(f"Saved evaluation report: {REPORT_PATH}")
-    print("NOTE: these metrics apply only to the held-out UCI dataset split, not to live firewall traffic.")
+        c = metrics["per_class"][action]
+        print(f"  {action:5s} precision={c['precision']:.3f}, "
+              f"recall={c['recall']:.3f}, F1={c['f1_score']:.3f}, support={c['support']}")
+    print(f"Uncalibrated ECE (10 bins): {metrics['calibration_diagnostics']['ece_10_bins']:.4f}")
+    print(f"Model: {MODEL_PATH}")
+    print(f"Reports: {REPORT_PATH} and {QUALITY_PATH}")
 
 
 if __name__ == "__main__":
     try:
         main()
     except (FileNotFoundError, ValueError) as exc:
-        print(f"ERROR: {exc}")
-        raise SystemExit(1)
+        raise SystemExit(f"ERROR: {exc}") from exc

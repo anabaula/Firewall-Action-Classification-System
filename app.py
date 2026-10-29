@@ -1,10 +1,10 @@
 from pathlib import Path
 import math
 from flask import Flask, jsonify, render_template, request
-from forest_model import ACTIONS, FEATURE_NAMES, load_model, predict
+from model_service import ACTIONS, FEATURE_NAMES, load_model, predict
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_PATH = BASE_DIR / "model" / "firewall_random_forest.json"
+MODEL_PATH = BASE_DIR / "model" / "firewall_random_forest.joblib"
 
 ACTION_DETAILS = {
     "Allow": {"description": "The model predicts this record resembles firewall traffic labeled Allow in the training data.", "explanation": "This is a prediction from historical records, not a live firewall rule or a security guarantee."},
@@ -13,6 +13,10 @@ ACTION_DETAILS = {
     "Reset": {"description": "The model predicts this record resembles traffic labeled Reset-Both in the training data.", "explanation": "Reset-Both is displayed as Reset. This prediction does not control a real connection."},
 }
 app = Flask(__name__)
+MODEL_LOAD_ERROR = (
+    "The trained model could not be loaded. Run train_model.bat to retrain it, "
+    "then restart NetSentry."
+)
 
 
 def load_saved_model():
@@ -26,24 +30,35 @@ def index():
 
 @app.get("/api/health")
 def health():
-    ready = MODEL_PATH.exists()
-    model = load_saved_model() if ready else None
+    try:
+        model = load_saved_model()
+    except Exception:
+        app.logger.exception("Failed to load the NetSentry model during health check")
+        return jsonify({"status": "model_error", "model_ready": False,
+                        "error": MODEL_LOAD_ERROR}), 503
+    ready = model is not None
     return jsonify({"status": "ready" if ready else "model_missing", "model_ready": ready,
                     "dataset": (model or {}).get("dataset_name", "UCI Internet Firewall Data")})
 
 
 @app.post("/api/predict")
 def predict_route():
-    model = load_saved_model()
+    try:
+        model = load_saved_model()
+    except Exception:
+        app.logger.exception("Failed to load the NetSentry model for prediction")
+        return jsonify({"error": MODEL_LOAD_ERROR}), 503
     if model is None:
-        return jsonify({"error": "The real-dataset model has not been trained yet. Download log2.csv, place it in data/log2.csv, then run: python train_model.py"}), 503
+        return jsonify({"error": "The real-dataset model has not been trained yet. Provide data/log2_cleaned.csv or data/log2.csv and run: python train_model.py"}), 503
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify({"error": "Could not read the submitted form. Please try again."}), 400
     try:
         values = {}
-        integer_fields = {"source_port", "destination_port", "nat_source_port", "nat_destination_port", "total_packets", "forward_packets", "backward_packets"}
+        integer_fields = {"source_port", "destination_port", "nat_source_port", "nat_destination_port", "total_bytes", "bytes_sent", "bytes_received", "total_packets", "forward_packets", "backward_packets"}
         for key in FEATURE_NAMES:
+            if isinstance(payload[key], bool):
+                raise ValueError(f"{key.replace('_', ' ').title()} must be a valid number.")
             value = float(payload[key])
             if not math.isfinite(value):
                 raise ValueError(f"{key.replace('_', ' ').title()} must be a valid number.")
@@ -70,7 +85,7 @@ def predict_route():
             "confidence": confidence,
             "description": details["description"],
             "explanation": details["explanation"],
-            "model_type": "Random Forest Classifier (pure Python)",
+            "model_type": "scikit-learn RandomForestClassifier",
             "dataset": model.get("dataset_name", "UCI Internet Firewall Data"),
             "is_synthetic_demo_model": False,
         })
