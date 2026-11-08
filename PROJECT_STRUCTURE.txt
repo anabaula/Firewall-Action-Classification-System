@@ -1,32 +1,34 @@
-Firewall Action Classification System — NetSentry (scikit-learn)
+Firewall Action Classification System — NetSentry
 
-Main source:
-  app.py                          Flask prediction API and site
-  model_service.py                Loads trusted joblib sklearn model / predicts
-  data_pipeline.py                Dataset validation, deduplication, split hygiene
-  train_model.py                  sklearn Pipeline training, CV and metrics
-  requirements.txt               Flask, pandas, scikit-learn, joblib
+SOURCE OF TRUTH
+  data/log2.csv                      Original UCI Internet Firewall Data (65,532 rows)
+  notebooks/DataCleaning.ipynb       Jupyter notebook with relative CSV path, pandas EDA,
+                                    Pipelines, stratified cross-validation and model comparison
 
-Inputs and generated files:
-  data/log2_cleaned.csv           Classmate supplied cleaned dataset (committed)
-  data/log2.csv                   Optional original UCI file (not included)
-  data/data_quality_report.json   Generated data quality report (Git ignored)
-  data/evaluation_report.json     Generated evaluation metrics (Git ignored)
-  model/firewall_random_forest.joblib  Generated sklearn Pipeline (Git ignored)
+DATA PREPROCESSING AND ML
+  data_pipeline.py                   Pandas-based validation, deduplication and audit
+  train_model.py                     Scikit-learn 100-tree Random Forest, CV and held-out test
+  model_service.py                   Trusted calibrated RF .joblib load and raw confidence predictions
+  data/data_quality_report.json      Generated audit, Git ignored
+  data/evaluation_report.json        Generated metrics, Git ignored
+  model/firewall_random_forest.joblib Generated model, Git ignored
 
-Supporting files:
-  notebooks/DataCleaning.ipynb    Classmate's Colab reference (unchanged)
-  tests/test_preprocessing.py     Cleaning and split unit tests
-  tests/test_api.py               Flask endpoint unit tests
-  tests/test_model_service.py     scikit-learn model roundtrip tests
-  templates/index.html            NetSentry web interface
-  static/style.css                Responsive dark-themed UI
-  static/app.js                   Browser-based prediction history
-  setup_project.bat               Create venv and install Python dependencies
-  train_model.bat                 Train sklearn model
-  start_website.bat               Start Flask website
-  verify_project.bat              Check required files
+WEBSITE
+  app.py                             Flask routes and input validation
+  templates/index.html              Page markup
+  static/style.css                   Styles
+  static/app.js                      UI interactions and local history
 
-The original pure-Python Random Forest is no longer used. The notebook and
-website share the sklearn RandomForestClassifier configuration but still differ
-in cleaning and test records. Read README.md before citing accuracy or confidence.
+TESTING AND STARTUP
+  requirements.txt                   Flask, pandas, scikit-learn, joblib
+  setup_project.bat                  Build virtual environment
+  train_model.bat                    Train from data/log2.csv
+  verify_project.bat                 Check expected files
+  start_website.bat                  Start website
+  tests/test_preprocessing.py        Cleaning and split tests
+  tests/test_model_service.py        Model tests
+  tests/test_api.py                  Website/API tests
+  tests/test_verification_script.py  Windows verification tests
+
+Original source: https://archive.ics.uci.edu/dataset/542/internet+firewall+data
+Read README.md for details, limitations, and course-method alignment.

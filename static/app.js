@@ -1,184 +1,295 @@
+// NetSentry single-page behavior: check model, classify traffic, save history.
+// Keep the existing browser storage key so old predictions remain available.
 const HISTORY_KEY = 'firewallai_prediction_history_v2';
-const PAGE_TITLES = { dashboard: 'Dashboard', classify: 'Classify traffic', history: 'Prediction history' };
-const ACTIONS = ['Allow', 'Deny', 'Drop', 'Reset'];
+const HISTORY_PAGE_SIZE = 3;
+let historyPage = 0;
 
+const form = document.getElementById('traffic-form');
+const message = document.getElementById('form-message');
+const predictButton = document.getElementById('predict-btn');
+const generateButton = document.getElementById('generate-btn');
+
+function escapeHTML(value) {
+  const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return String(value ?? '').replace(/[&<>"']/g, character => entities[character]);
+}
+
+function confidenceText(value) {
+  if (value == null || !Number.isFinite(Number(value))) return '—';
+  // Display exactly two decimals without rounding the original model confidence up.
+  return `${(Math.trunc(Number(value) * 100) / 100).toFixed(2)}%`;
+}
+
+function formatTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString([], {
+    month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit'
+  });
+}
+
+// Prediction history is stored in this browser, not in a server database.
 function getHistory() {
-  try { const value = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); return Array.isArray(value) ? value : []; }
-  catch { return []; }
-}
-function saveHistory(items) { localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, 100))); }
-function esc(value) { return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
-function actionClass(action) { return ({Allow:'allow',Deny:'deny',Drop:'drop',Reset:'reset'})[action] || 'allow'; }
-function actionPill(action) { return `<span class="action-pill action-${actionClass(action)}">${esc(action)}</span>`; }
-function formatTime(iso) { const date = new Date(iso); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString([], {month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'}); }
-function confidenceText(value) { return value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}%`; }
-
-function showPage(name) {
-  document.querySelectorAll('.page').forEach(page => page.classList.toggle('active', page.id === `page-${name}`));
-  document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.page === name));
-  document.getElementById('breadcrumb-current').textContent = PAGE_TITLES[name] || 'Dashboard';
-  document.getElementById('sidebar').classList.remove('open');
-  window.scrollTo({top: 0, behavior: 'smooth'});
-  if (name === 'history') renderHistory();
-}
-
-document.querySelectorAll('[data-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
-document.querySelectorAll('[data-go]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.go)));
-document.getElementById('mobile-menu').addEventListener('click', () => document.getElementById('sidebar').classList.toggle('open'));
-document.addEventListener('click', event => {
-  const sidebar = document.getElementById('sidebar');
-  if (window.innerWidth <= 900 && sidebar.classList.contains('open') && !sidebar.contains(event.target) && !event.target.closest('#mobile-menu')) sidebar.classList.remove('open');
-});
-
-async function checkModelStatus() {
   try {
-    const response = await fetch('/api/health');
-    const health = await response.json();
-    const ready = health.model_ready;
-
-    document.getElementById('header-status').textContent = ready ? 'MODEL READY' : 'MODEL NOT TRAINED';
-    document.querySelector('.system-pill').classList.toggle('warning', !ready);
+    const saved = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+    return Array.isArray(saved) ? saved : [];
   } catch {
-
-    document.getElementById('header-status').textContent = 'API UNAVAILABLE';
-    document.querySelector('.system-pill').classList.add('warning');
+    return [];
   }
 }
 
-function renderStats() {
-  const history = getHistory();
-  document.getElementById('stat-total').textContent = history.length;
-  document.getElementById('stat-allow').textContent = history.filter(row => row.action === 'Allow').length;
-  document.getElementById('stat-deny').textContent = history.filter(row => row.action === 'Deny').length;
-  document.getElementById('stat-other').textContent = history.filter(row => ['Drop','Reset'].includes(row.action)).length;
-  const recent = history.slice(0, 5);
-  const tbody = document.getElementById('recent-table');
-  if (!recent.length) {
-    tbody.innerHTML = '<tr><td class="empty-cell" colspan="6"><div class="empty-icon">⌁</div><b>No predictions yet</b><span>Run your first classification to see results here.</span><button class="text-link" data-go="classify">Start classifying →</button></td></tr>';
-    tbody.querySelector('[data-go]')?.addEventListener('click', () => showPage('classify'));
-    return;
-  }
-  tbody.innerHTML = recent.map(row => `<tr><td>${esc(formatTime(row.time))}</td><td>${esc(row.source_port)}</td><td>${esc(row.destination_port)}</td><td>${esc(row.total_packets)}</td><td>${actionPill(row.action)}</td><td class="confidence">${esc(confidenceText(row.confidence))}</td></tr>`).join('');
+function saveHistory(records) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(records.slice(0, 100)));
 }
 
 function renderHistory() {
   const search = document.getElementById('history-search').value.trim().toLowerCase();
   const filter = document.getElementById('history-filter').value;
-  const all = getHistory();
-  const rows = all.filter(row => {
-    const matchesSearch = String(row.source_port).includes(search) || String(row.destination_port).includes(search);
-    return matchesSearch && (filter === 'all' || row.action === filter);
+  const history = getHistory();
+
+  // Keep the original history index so Details opens the correct record.
+  const rows = history.map((record, index) => ({ record, index })).filter(({ record }) => {
+    const matchesSearch =
+      formatTime(record.time).toLowerCase().includes(search) ||
+      String(record.action ?? '').toLowerCase().includes(search);
+    return matchesSearch && (filter === 'all' || record.action === filter);
   });
-  const tbody = document.getElementById('history-table');
-  if (!rows.length) {
-    tbody.innerHTML = `<tr><td class="empty-cell" colspan="7">${all.length ? 'No records match your search.' : 'No history saved yet. Run a classification first.'}</td></tr>`;
+
+  const tableBody = document.getElementById('history-table');
+  if (rows.length === 0) {
+    const label = history.length ? 'No matches.' : 'No predictions yet.';
+    tableBody.innerHTML = `<tr><td colspan="4" class="empty-cell">${label}</td></tr>`;
+    historyPage = 0;
+    document.getElementById('history-page-info').textContent = '0 predictions';
+    document.getElementById('history-prev').disabled = true;
+    document.getElementById('history-next').disabled = true;
     return;
   }
-  tbody.innerHTML = rows.map(row => `<tr><td>${esc(formatTime(row.time))}</td><td>${esc(row.source_port)}</td><td>${esc(row.destination_port)}</td><td>${esc(row.total_packets)}</td><td>${esc(row.nat_source_port)}</td><td>${actionPill(row.action)}</td><td class="confidence">${esc(confidenceText(row.confidence))}</td></tr>`).join('');
+
+  const pages = Math.ceil(rows.length / HISTORY_PAGE_SIZE);
+  historyPage = Math.min(historyPage, pages - 1);
+  const visible = rows.slice(historyPage * HISTORY_PAGE_SIZE, (historyPage + 1) * HISTORY_PAGE_SIZE);
+  document.getElementById('history-page-info').textContent =
+    `${rows.length} prediction${rows.length === 1 ? '' : 's'} · ${historyPage + 1} / ${pages}`;
+  document.getElementById('history-prev').disabled = historyPage === 0;
+  document.getElementById('history-next').disabled = historyPage === pages - 1;
+
+  tableBody.innerHTML = visible.map(({ record, index }) => `
+    <tr>
+      <td>${escapeHTML(formatTime(record.time))}</td>
+      <td><span class="history-action">${escapeHTML(record.action)}</span></td>
+      <td>${escapeHTML(confidenceText(record.confidence))}</td>
+      <td><button type="button" class="details-button" data-history-index="${index}">Details</button></td>
+    </tr>
+  `).join('');
 }
 
-document.getElementById('history-search').addEventListener('input', renderHistory);
-document.getElementById('history-filter').addEventListener('change', renderHistory);
+// Show every input saved for a prediction. Old records may only have a few fields.
+const detailsDialog = document.getElementById('history-details');
+const inputFields = Array.from(form.querySelectorAll('input[name]')).map(input => ({
+  name: input.name,
+  label: input.labels?.[0]?.textContent.trim() || input.name
+}));
+
+document.getElementById('history-table').addEventListener('click', event => {
+  const button = event.target.closest('[data-history-index]');
+  if (!button) return;
+
+  const record = getHistory()[Number(button.dataset.historyIndex)];
+  if (!record) return;
+
+  document.getElementById('details-summary').textContent =
+    `${formatTime(record.time)} · ${record.action ?? 'Unknown'} · ${confidenceText(record.confidence)}`;
+
+  const fields = document.getElementById('details-fields');
+  fields.replaceChildren();
+  for (const field of inputFields) {
+    const wrapper = document.createElement('div');
+    const label = document.createElement('dt');
+    const value = document.createElement('dd');
+    label.textContent = field.label;
+    value.textContent = record[field.name] == null ? 'Not recorded' : String(record[field.name]);
+    wrapper.append(label, value);
+    fields.append(wrapper);
+  }
+
+  detailsDialog.showModal();
+});
+
+document.getElementById('details-close').addEventListener('click', () => detailsDialog.close());
+document.getElementById('details-done').addEventListener('click', () => detailsDialog.close());
+
+document.getElementById('history-search').addEventListener('input', () => {
+  historyPage = 0;
+  renderHistory();
+});
+document.getElementById('history-filter').addEventListener('change', () => {
+  historyPage = 0;
+  renderHistory();
+});
+document.getElementById('history-prev').addEventListener('click', () => {
+  historyPage = Math.max(0, historyPage - 1);
+  renderHistory();
+});
+document.getElementById('history-next').addEventListener('click', () => {
+  historyPage += 1;
+  renderHistory();
+});
 document.getElementById('clear-history').addEventListener('click', () => {
-  if (!getHistory().length) return;
-  if (window.confirm('Clear all prediction history stored in this browser?')) {
-    saveHistory([]); renderStats(); renderHistory();
+  if (getHistory().length && window.confirm('Clear the prediction history saved in this browser?')) {
+    saveHistory([]);
+    renderHistory();
   }
 });
 
-// Accessible, theme-matched number controls; native keyboard input remains intact.
-function updateNumberStepper(input) {
-  const stepper = input.closest('.number-control')?.querySelector('.number-stepper');
-  if (!stepper) return;
-  const value = input.valueAsNumber;
-  const min = input.min === '' ? -Infinity : Number(input.min);
-  const max = input.max === '' ? Infinity : Number(input.max);
+// Show the custom number arrows only on the input the user has focused.
+function updateStepper(input) {
+  const stepper = input.closest('.number-control').querySelector('.number-stepper');
+  const current = input.valueAsNumber;
+  const minimum = Number(input.min);
+  const maximum = input.max ? Number(input.max) : Infinity;
+
   stepper.querySelector('[data-step="up"]').disabled =
-    input.disabled || input.readOnly || (Number.isFinite(value) && value >= max);
+    input.disabled || (Number.isFinite(current) && current >= maximum);
   stepper.querySelector('[data-step="down"]').disabled =
-    input.disabled || input.readOnly || (Number.isFinite(value) && value <= min);
+    input.disabled || (Number.isFinite(current) && current <= minimum);
 }
 
-function adjustNumberInput(input, direction) {
+function changeNumber(input, direction) {
   if (input.disabled || input.readOnly) return;
-  const min = input.min === '' ? -Infinity : Number(input.min);
-  const max = input.max === '' ? Infinity : Number(input.max);
+
   if (input.step === 'any') {
-    // Duration can be fractional; move it by 0.1 seconds.
-    const current = Number.isFinite(input.valueAsNumber)
-      ? input.valueAsNumber : (Number.isFinite(min) ? min : 0);
+    const current = Number.isFinite(input.valueAsNumber) ? input.valueAsNumber : 0;
     const next = Math.round((current + direction * 0.1) * 1e6) / 1e6;
-    input.value = String(Math.max(min, Math.min(max, next)));
+    input.value = String(Math.max(Number(input.min), next));
+  } else if (direction > 0) {
+    input.stepUp();
   } else {
-    if (direction > 0) input.stepUp();
-    else input.stepDown();
+    input.stepDown();
   }
+
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
   input.focus({ preventScroll: true });
 }
 
 document.querySelectorAll('.number-control').forEach(control => {
   const input = control.querySelector('input[type="number"]');
-  control.querySelectorAll('.number-step-button').forEach(button => {
-    button.addEventListener('click', () => adjustNumberInput(
-      input, button.dataset.step === 'up' ? 1 : -1
-    ));
+  control.querySelectorAll('[data-step]').forEach(button => {
+    button.addEventListener('click', () => {
+      changeNumber(input, button.dataset.step === 'up' ? 1 : -1);
+    });
   });
-  input.addEventListener('input', () => updateNumberStepper(input));
-  input.addEventListener('change', () => updateNumberStepper(input));
-  updateNumberStepper(input);
+  input.addEventListener('input', () => updateStepper(input));
+  updateStepper(input);
 });
 
-document.getElementById('traffic-form').addEventListener('reset', () => {
-  document.getElementById('form-message').textContent = '';
-  document.getElementById('form-message').className = 'form-message';
-  requestAnimationFrame(() => {
-    document.querySelectorAll('.number-control input[type="number"]').forEach(updateNumberStepper);
-  });
-});
+function showPrediction(result) {
+  document.getElementById('result-empty').classList.add('hidden');
+  document.getElementById('result-output').classList.remove('hidden');
 
-document.getElementById('traffic-form').addEventListener('submit', async event => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const message = document.getElementById('form-message');
-  const button = document.getElementById('predict-btn');
-  const payload = Object.fromEntries(new FormData(form).entries());
-  for (const key of ['source_port','destination_port','nat_source_port','nat_destination_port','total_bytes','bytes_sent','bytes_received','total_packets','connection_duration','forward_packets','backward_packets']) payload[key] = Number(payload[key]);
-  message.className = 'form-message';
+  const actionLabel = document.getElementById('result-action');
+  actionLabel.textContent = result.action.toUpperCase();
+  actionLabel.dataset.action = result.action.toLowerCase();
+  document.getElementById('result-confidence').textContent = confidenceText(result.confidence);
+}
+
+function clearPrediction() {
+  document.getElementById('result-action').removeAttribute('data-action');
+  document.getElementById('result-output').classList.add('hidden');
+  document.getElementById('result-empty').classList.remove('hidden');
+}
+
+// Fill the form from a real cleaned UCI dataset record; never auto-classify.
+generateButton.addEventListener('click', async () => {
+  predictButton.disabled = true;
+  generateButton.disabled = true;
+  generateButton.textContent = 'Generating…';
   message.textContent = '';
-  button.disabled = true;
-  button.innerHTML = '<span class="spinner"></span> Classifying…';
+  message.className = 'form-message';
+
   try {
-    const response = await fetch('/api/predict', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'Prediction failed.');
-    document.getElementById('result-badge').className = `action-badge ${actionClass(result.action)}`;
-    document.getElementById('result-badge').textContent = result.action.toUpperCase();
-    document.getElementById('result-title').textContent = ({Allow:'Traffic may be permitted',Deny:'Traffic may be rejected',Drop:'Traffic may be discarded',Reset:'Connection may be reset'})[result.action] || 'Prediction complete';
-    document.getElementById('result-description').textContent = result.description;
-    document.getElementById('result-confidence').textContent = confidenceText(result.confidence);
-    document.getElementById('confidence-bar').style.width = `${Math.max(0, Math.min(100, Number(result.confidence || 0)))}%`;
-    document.getElementById('result-panel').classList.remove('hidden');
-    const record = {time:new Date().toISOString(), source_port:payload.source_port, destination_port:payload.destination_port, nat_source_port:payload.nat_source_port, total_packets:payload.total_packets, action:result.action, confidence:result.confidence};
-    saveHistory([record, ...getHistory()]);
-    renderStats();
-    message.className = 'form-message success';
-    message.textContent = 'Classification completed. Results saved in this browser.';
-    document.getElementById('result-panel').scrollIntoView({behavior:'smooth', block:'start'});
+    const response = await fetch('/api/sample', { cache: 'no-store' });
+    const example = await response.json();
+    if (!response.ok) throw new Error(example.error || 'Could not load a dataset example.');
+    if (!example.features || inputFields.some(field =>
+      !Number.isFinite(Number(example.features[field.name])) || example.features[field.name] == null
+    )) throw new Error('The dataset example is incomplete.');
+
+    for (const input of form.querySelectorAll('input[name]')) {
+      input.value = String(example.features[input.name]);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    clearPrediction();
+    message.textContent = 'Held-out test example loaded. Click Classify to predict.';
   } catch (error) {
-    message.className = 'form-message';
-    message.textContent = error.message || 'Could not connect to the Flask API. Check that the server is running.';
+    message.textContent = error.message || 'Could not load a dataset example.';
   } finally {
-    button.disabled = false;
-    button.innerHTML = 'Predict firewall action <span class="arrow">→</span>';
+    predictButton.disabled = false;
+    generateButton.disabled = false;
+    generateButton.textContent = 'Generate';
   }
 });
 
-document.getElementById('classify-another').addEventListener('click', () => {
-  document.getElementById('result-panel').classList.add('hidden');
-  document.getElementById('traffic-form').scrollIntoView({behavior:'smooth',block:'start'});
+// Submit the 11 numeric fields to Flask, then show the result and save history.
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+
+  const values = Object.fromEntries(new FormData(form).entries());
+  for (const field of Object.keys(values)) {
+    values[field] = Number(values[field]);
+  }
+
+  message.textContent = '';
+  message.className = 'form-message';
+  predictButton.disabled = true;
+  generateButton.disabled = true;
+  predictButton.textContent = 'Classifying…';
+
+  try {
+    const response = await fetch('/api/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(values)
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Could not classify this traffic record.');
+    }
+
+    showPrediction(result);
+    // Save all 11 form inputs for the History > Details window.
+    const record = {
+      ...values,
+      time: new Date().toISOString(),
+      action: result.action,
+      confidence: result.confidence
+    };
+    try {
+      saveHistory([record, ...getHistory()]);
+      historyPage = 0;
+      renderHistory();
+      message.textContent = 'Saved to history.';
+    } catch {
+      message.textContent = 'Predicted. History not saved.';
+    }
+    message.className = 'form-message success';
+  } catch (error) {
+    message.textContent = error.message || 'Could not reach the prediction server.';
+  } finally {
+    predictButton.disabled = false;
+    generateButton.disabled = false;
+    predictButton.textContent = 'Classify';
+  }
 });
 
-checkModelStatus();
-renderStats();
+form.addEventListener('reset', () => {
+  message.textContent = '';
+  message.className = 'form-message';
+  clearPrediction();
+  requestAnimationFrame(() => {
+    form.querySelectorAll('input[type="number"]').forEach(updateStepper);
+  });
+});
+
+renderHistory();

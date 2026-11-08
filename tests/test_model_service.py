@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import joblib
@@ -12,7 +13,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 
 from model_service import ACTIONS, DATASET_NAME, FEATURE_NAMES, load_model, predict
-from train_model import make_pipeline
+from train_model import make_calibrated_pipeline, make_pipeline
 
 
 class ModelServiceTests(unittest.TestCase):
@@ -40,6 +41,18 @@ class ModelServiceTests(unittest.TestCase):
         self.assertEqual(classifier.random_state, 42)
         self.assertEqual(pipeline.named_steps["imputer"].strategy, "median")
 
+    def test_regularized_random_forest_and_calibration_configuration(self):
+        forest = make_pipeline(min_samples_leaf=2, max_depth=24)
+        self.assertEqual(forest.named_steps["model"].min_samples_leaf, 2)
+        self.assertEqual(forest.named_steps["model"].max_depth, 24)
+        calibrated = make_calibrated_pipeline(
+            min_samples_leaf=2, max_depth=24, calibration_folds=3,
+        )
+        self.assertEqual(calibrated.method, "sigmoid")
+        self.assertEqual(calibrated.cv, 3)
+        self.assertFalse(calibrated.ensemble)
+        self.assertEqual(calibrated.estimator.named_steps["model"].n_estimators, 100)
+
     def test_predict_uses_sklearn_probabilities(self):
         bundle = self.fixture()
         label, confidence, probabilities = predict(bundle, [5.] * 11)
@@ -47,6 +60,18 @@ class ModelServiceTests(unittest.TestCase):
         self.assertEqual(confidence, 100.)
         self.assertEqual(set(probabilities), set(ACTIONS))
         self.assertAlmostEqual(sum(probabilities.values()), 1.0)
+
+    def test_confidence_does_not_round_up_to_100(self):
+        bundle = self.fixture()
+        raw_probability = 0.99999123456
+        with patch.object(bundle["pipeline"], "predict_proba", return_value=[
+            [raw_probability, 1 - raw_probability, 0., 0.]
+        ]):
+            label, confidence, probabilities = predict(bundle, [5.] * 11)
+        self.assertEqual(label, "Allow")
+        self.assertAlmostEqual(confidence, 99.999123456)
+        self.assertLess(confidence, 100.)
+        self.assertEqual(probabilities["Allow"], raw_probability)
 
     def test_invalid_feature_count(self):
         with self.assertRaisesRegex(ValueError, "Expected 11"):

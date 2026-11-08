@@ -4,23 +4,26 @@ cd /d "%~dp0"
 echo ================================================
 echo Firewall Action Classifier - Initial Setup
 echo ================================================
+set "PYTHON_CMD=py"
 where py >nul 2>nul
 if errorlevel 1 (
-  echo ERROR: Python Launcher 'py' was not found.
-  echo Install Python from https://www.python.org/downloads/ then reopen this file.
-  pause
-  exit /b 1
+  where python >nul 2>nul
+  if errorlevel 1 (
+    echo ERROR: Python was not found.
+    echo Install Python from https://www.python.org/downloads/ then reopen this file.
+    pause
+    exit /b 1
+  )
+  set "PYTHON_CMD=python"
 )
 if not exist ".venv\Scripts\python.exe" (
   echo Creating virtual environment...
-  py -m venv .venv
+  %PYTHON_CMD% -m venv .venv
   if errorlevel 1 goto failed
 ) else (
   echo Virtual environment already exists; keeping it.
 )
 echo Installing requirements...
-".venv\Scripts\python.exe" -m pip install --upgrade pip
-if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 goto failed
 echo.

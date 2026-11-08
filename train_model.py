@@ -1,8 +1,7 @@
-"""Train NetSentry with scikit-learn, following the classmate's Colab approach.
+"""Train a Random Forest from the original UCI firewall CSV.
 
-Validated UCI data -> 80/20 stratified split -> median imputer and
-100-tree RandomForestClassifier(class_weight="balanced") -> held-out evaluation.
-Five-fold CV uses training data only; held-out test data is never trained on.
+Steps: clean data, split, cross-validate, train, test, then save the model.
+Preprocessing is inside the scikit-learn Pipeline to avoid data leakage.
 """
 from __future__ import annotations
 
@@ -14,6 +13,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
@@ -26,7 +26,6 @@ from data_pipeline import load_dataset
 from model_service import ACTIONS, DATASET_NAME, FEATURE_NAMES
 
 BASE_DIR = Path(__file__).resolve().parent
-CLEANED_DATA_PATH = BASE_DIR / "data" / "log2_cleaned.csv"
 ORIGINAL_DATA_PATH = BASE_DIR / "data" / "log2.csv"
 MODEL_PATH = BASE_DIR / "model" / "firewall_random_forest.joblib"
 REPORT_PATH = BASE_DIR / "data" / "evaluation_report.json"
@@ -34,19 +33,31 @@ QUALITY_PATH = BASE_DIR / "data" / "data_quality_report.json"
 DATASET_DOI = "10.24432/C5131M"
 
 
-def make_pipeline(trees: int = 100) -> Pipeline:
-    """Same sklearn model settings as the reference notebook."""
+def make_pipeline(trees: int = 100, *, min_samples_leaf: int = 1,
+                  max_depth: int | None = None) -> Pipeline:
+    """Reusable Random Forest pipeline with optional tree regularization."""
     return Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
         ("model", RandomForestClassifier(
-            n_estimators=trees, random_state=42,
-            class_weight="balanced", n_jobs=-1,
+            n_estimators=trees, random_state=42, class_weight="balanced",
+            min_samples_leaf=min_samples_leaf, max_depth=max_depth, n_jobs=-1,
         )),
     ])
 
 
-def evaluate(y_true, predictions, probabilities, model_classes) -> dict:
-    """Metrics on the untouched holdout; confidences are NOT calibrated."""
+def make_calibrated_pipeline(trees: int = 100, *, min_samples_leaf: int = 1,
+                             max_depth: int | None = None,
+                             calibration_folds: int = 3) -> CalibratedClassifierCV:
+    """Sigmoid calibration from out-of-fold predictions on training data only."""
+    return CalibratedClassifierCV(
+        estimator=make_pipeline(trees, min_samples_leaf=min_samples_leaf,
+                                max_depth=max_depth),
+        method="sigmoid", cv=calibration_folds, ensemble=False,
+    )
+
+
+def evaluate(y_true, predictions, probabilities, model_classes, *, calibrated=False) -> dict:
+    """Accuracy, minority-class performance, and confidence diagnostics."""
     detail = classification_report(
         y_true, predictions, labels=ACTIONS, output_dict=True, zero_division=0,
     )
@@ -93,8 +104,86 @@ def evaluate(y_true, predictions, probabilities, model_classes) -> dict:
         "calibration_diagnostics": {
             "ece_10_bins": ece,
             "multiclass_brier_score": multiclass_brier,
-            "probabilities_calibrated": False,
+            "probabilities_calibrated": bool(calibrated),
+            "exact_100_confidence_count": int(np.sum(confidence == 1)),
+            "exact_100_confidence_wrong": int(np.sum((confidence == 1) & ~correct)),
+            "median_confidence": float(np.median(confidence)),
         },
+    }
+
+
+REGULARIZATION_OPTIONS = [
+    ("unrestricted", {"min_samples_leaf": 1, "max_depth": None}),
+    ("leaf_2_depth_24", {"min_samples_leaf": 2, "max_depth": 24}),
+    ("leaf_3_depth_18", {"min_samples_leaf": 3, "max_depth": 18}),
+]
+
+
+def choose_parameters(X_train, y_train, trees: int, calibration_folds: int):
+    """Choose settings with training-only validation, never the held-out test.
+
+    Compare uncalibrated regularization candidates first, then calibrate the
+    unrestricted model and the strongest regularized finalist. Select with
+    validation macro F1 to avoid overlooking the rare Reset class.
+    """
+    X_fit, X_val, y_fit, y_val = train_test_split(
+        X_train, y_train, test_size=0.2, random_state=43, stratify=y_train,
+    )
+    comparisons = []
+    for name, params in REGULARIZATION_OPTIONS:
+        forest = make_pipeline(trees, **params)
+        forest.fit(X_fit, y_fit)
+        values = evaluate(y_val, forest.predict(X_val),
+                          forest.predict_proba(X_val), forest.classes_)
+        comparisons.append({
+            "candidate": name, "parameters": params,
+            "validation_accuracy": values["accuracy"],
+            "validation_macro_f1": values["macro_f1"],
+            "validation_reset_recall": values["per_class"]["Reset"]["recall"],
+            "exact_100_count": values["calibration_diagnostics"]["exact_100_confidence_count"],
+        })
+        print(f"  {name}: macro F1={values['macro_f1']:.4f}, "
+              f"Reset recall={values['per_class']['Reset']['recall']:.3f}",
+              flush=True)
+
+    best_regularized = max(
+        comparisons[1:],
+        key=lambda item: (item["validation_macro_f1"], item["validation_accuracy"]),
+    )
+    calibrated_comparison = []
+    for candidate in (comparisons[0], best_regularized):
+        model = make_calibrated_pipeline(
+            trees, **candidate["parameters"], calibration_folds=calibration_folds,
+        )
+        model.fit(X_fit, y_fit)
+        values = evaluate(y_val, model.predict(X_val),
+                          model.predict_proba(X_val), model.classes_,
+                          calibrated=True)
+        calibrated_comparison.append({
+            "candidate": candidate["candidate"],
+            "parameters": candidate["parameters"],
+            "validation_accuracy": values["accuracy"],
+            "validation_macro_f1": values["macro_f1"],
+            "validation_reset_recall": values["per_class"]["Reset"]["recall"],
+            "validation_brier_score": values["calibration_diagnostics"]["multiclass_brier_score"],
+            "exact_100_count": values["calibration_diagnostics"]["exact_100_confidence_count"],
+        })
+        print(f"  calibrated {candidate['candidate']}: "
+              f"macro F1={values['macro_f1']:.4f}, "
+              f"Reset recall={values['per_class']['Reset']['recall']:.3f}",
+              flush=True)
+
+    best = max(calibrated_comparison, key=lambda item: (
+        item["validation_macro_f1"], item["validation_accuracy"],
+        -item["validation_brier_score"],
+    ))
+    return best["parameters"], {
+        "procedure": "Training-only stratified 20% validation (random_state=43); "
+                     "select calibrated macro-F1, break ties by accuracy and Brier",
+        "validation_size": len(y_val),
+        "regularization_candidates": comparisons,
+        "calibrated_finalists": calibrated_comparison,
+        "selected_candidate": best["candidate"],
     }
 
 
@@ -102,20 +191,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dataset", type=Path,
-        default=CLEANED_DATA_PATH if CLEANED_DATA_PATH.is_file() else ORIGINAL_DATA_PATH,
-        help="UCI-style CSV (defaults to classmate's cleaned CSV).",
+        default=ORIGINAL_DATA_PATH,
+        help="Raw UCI CSV (default: data/log2.csv).",
     )
     parser.add_argument("--validate-only", action="store_true", help="Only audit dataset.")
     parser.add_argument("--trees", type=int, default=100, help="Forest trees (Colab: 100).")
+    parser.add_argument("--calibration-folds", type=int, default=3,
+                        help="Training-only sigmoid calibration folds (default: 3).")
     parser.add_argument(
         "--cv-folds", type=int, default=5,
         help="Training-only stratified cross-validation folds (0 to skip; Colab: 5).",
     )
     args = parser.parse_args()
-    if args.trees < 1 or args.cv_folds not in (0, 2, 3, 4, 5, 6, 7, 8, 9, 10):
-        parser.error("--trees must be positive; --cv-folds must be 0 or 2–10.")
+    if (args.trees < 1 or args.cv_folds not in (0, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+            or not 2 <= args.calibration_folds <= 10):
+        parser.error("--trees must be positive, --cv-folds 0 or 2–10, "
+                     "and --calibration-folds 2–10.")
 
-    rows, counts, quality = load_dataset(args.dataset)
+    # Step 1: Read and clean the raw CSV. Keep a report of excluded rows.
+    rows, _counts, quality = load_dataset(args.dataset)
     QUALITY_PATH.parent.mkdir(parents=True, exist_ok=True)
     QUALITY_PATH.write_text(json.dumps(quality, indent=2), encoding="utf-8")
     print(
@@ -127,10 +221,12 @@ def main() -> None:
         print(f"Data quality report: {QUALITY_PATH}")
         return
 
+    # Step 2: Separate input measurements (X) from action labels (y).
     X = pd.DataFrame(
         [row["features"] for row in rows], columns=FEATURE_NAMES, dtype=float,
     )
     y = pd.Series([row["action"] for row in rows], name="action")
+    # Step 3: Keep 20% of records aside for independent testing.
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y,
     )
@@ -141,7 +237,13 @@ def main() -> None:
     if train_keys & test_keys:
         raise ValueError("Identical feature vectors appear in both splits.")
     print(f"Train: {len(X_train):,}; held-out test: {len(X_test):,}")
-    pipeline = make_pipeline(args.trees)
+    print("Comparing tree regularization and calibration on training-only validation...")
+    selected_params, selection = choose_parameters(
+        X_train, y_train, args.trees, args.calibration_folds,
+    )
+    print(f"Selected {selection['selected_candidate']}: {selected_params}", flush=True)
+    pipeline = make_pipeline(args.trees, **selected_params)
+    # Step 4: Cross-validate the selected base forest on training data only.
     cv = None
     if args.cv_folds:
         print(f"Evaluating {args.cv_folds}-fold stratified CV on training data only...")
@@ -149,34 +251,59 @@ def main() -> None:
         scores = cross_validate(
             pipeline, X_train, y_train, cv=splitter,
             scoring={"accuracy": "accuracy", "macro_f1": "f1_macro"},
-            n_jobs=1, error_score="raise",
+            n_jobs=1, error_score="raise", return_train_score=True,
         )
+        training_accuracy = float(np.mean(scores["train_accuracy"]))
+        validation_accuracy = float(np.mean(scores["test_accuracy"]))
+        accuracy_gap = 100 * (training_accuracy - validation_accuracy)
+
         cv = {
             "folds": args.cv_folds,
             "accuracy_scores": [float(x) for x in scores["test_accuracy"]],
-            "mean_accuracy": float(np.mean(scores["test_accuracy"])),
+            "mean_accuracy": validation_accuracy,
             "macro_f1_scores": [float(x) for x in scores["test_macro_f1"]],
             "mean_macro_f1": float(np.mean(scores["test_macro_f1"])),
+            "training_accuracy_scores": [float(x) for x in scores["train_accuracy"]],
+            "mean_training_accuracy": training_accuracy,
+            "training_validation_gap_percentage_points": accuracy_gap,
+            "validation_accuracy_at_least_85_percent": validation_accuracy >= 0.85,
+            "training_validation_gap_at_most_5_percentage_points": accuracy_gap <= 5,
         }
         print(
             f"Training CV accuracy: {cv['mean_accuracy']:.4%}, "
             f"macro F1: {cv['mean_macro_f1']:.4f}"
         )
-    print("Training the scikit-learn Random Forest pipeline...")
-    pipeline.fit(X_train, y_train)
-    predicted = pipeline.predict(X_test)
-    probabilities = pipeline.predict_proba(X_test)
-    metrics = evaluate(y_test, predicted, probabilities, pipeline.classes_)
+    # Step 5: Calibrate with internal training folds, then evaluate on X_test.
+    print("Fitting training-only cross-validated sigmoid calibration...", flush=True)
+    calibrated_pipeline = make_calibrated_pipeline(
+        args.trees, **selected_params, calibration_folds=args.calibration_folds,
+    )
+    calibrated_pipeline.fit(X_train, y_train)
+    predicted = calibrated_pipeline.predict(X_test)
+    probabilities = calibrated_pipeline.predict_proba(X_test)
+    metrics = evaluate(y_test, predicted, probabilities,
+                       calibrated_pipeline.classes_, calibrated=True)
+    # The final base forest from ensemble=False is also trained on X_train.
+    raw_model = calibrated_pipeline.calibrated_classifiers_[0].estimator
+    raw_metrics = evaluate(y_test, raw_model.predict(X_test),
+                           raw_model.predict_proba(X_test), raw_model.classes_)
     report = {
         "dataset": DATASET_NAME,
         "dataset_doi": DATASET_DOI,
         "dataset_file": args.dataset.name,
-        "implementation": "scikit-learn Pipeline(SimpleImputer, RandomForestClassifier)",
+        "implementation": "CalibratedClassifierCV(sigmoid, Pipeline(SimpleImputer, RandomForestClassifier))",
+        "model_selection": selection,
+        "calibration": {
+            "method": "sigmoid", "cv_folds": args.calibration_folds,
+            "training_only": True, "ensemble": False,
+            "note": "Calibration uses only the 80% training partition.",
+        },
         "model_parameters": {
             "n_estimators": args.trees,
             "random_state": 42,
             "class_weight": "balanced",
             "imputer_strategy": "median",
+            **selected_params,
         },
         "quality_report": quality,
         "train_split_size": len(X_train),
@@ -184,17 +311,23 @@ def main() -> None:
         "training_class_counts": dict(Counter(y_train)),
         "test_class_counts": dict(Counter(y_test)),
         "cross_validation": cv,
+        "uncalibrated_holdout": {
+            "accuracy": raw_metrics["accuracy"],
+            "macro_f1": raw_metrics["macro_f1"],
+            "per_class": raw_metrics["per_class"],
+            "calibration_diagnostics": raw_metrics["calibration_diagnostics"],
+        },
         **metrics,
         "warning": (
-            "Not calibrated probabilities; accuracy and CV are evaluated on the "
-            "provided historical CSV only. Rare Reset support is small. "
-            "Classmate's cleaned CSV provenance is not fully reproducible."
+            "Sigmoid-calibrated confidence is not a guarantee of correctness. "
+            "Reset has very few examples. Performance on historical UCI traffic "
+            "does not establish reliability on new network environments."
         ),
     }
-    # Save fitted pipeline and ordered feature names together. Joblib is
-    # trusted local data only; never load arbitrary uploaded pickle files.
+    # Step 6: Save the fitted model, its feature names, and evaluation reports.
+    # Joblib files are only safe to load when created by trusted code.
     bundle = {
-        "pipeline": pipeline,
+        "pipeline": calibrated_pipeline,
         "feature_names": FEATURE_NAMES,
         "dataset_name": DATASET_NAME,
         "dataset_file": args.dataset.name,
@@ -210,7 +343,11 @@ def main() -> None:
         c = metrics["per_class"][action]
         print(f"  {action:5s} precision={c['precision']:.3f}, "
               f"recall={c['recall']:.3f}, F1={c['f1_score']:.3f}, support={c['support']}")
-    print(f"Uncalibrated ECE (10 bins): {metrics['calibration_diagnostics']['ece_10_bins']:.4f}")
+    print(f"Uncalibrated ECE (10 bins): {raw_metrics['calibration_diagnostics']['ece_10_bins']:.4f}")
+    print(f"Calibrated ECE (10 bins): {metrics['calibration_diagnostics']['ece_10_bins']:.4f}")
+    print(f"Exact 100% confidence count: raw="
+          f"{raw_metrics['calibration_diagnostics']['exact_100_confidence_count']}, "
+          f"calibrated={metrics['calibration_diagnostics']['exact_100_confidence_count']}")
     print(f"Model: {MODEL_PATH}")
     print(f"Reports: {REPORT_PATH} and {QUALITY_PATH}")
 

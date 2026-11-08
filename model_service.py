@@ -26,7 +26,7 @@ def _load_cached(path: str, stamp: int) -> dict:
         raise ValueError("Model metadata is missing or contains incorrect features.")
     pipeline = bundle.get("pipeline")
     if pipeline is None or not hasattr(pipeline, "predict_proba"):
-        raise ValueError("Saved file does not contain a fitted sklearn Pipeline.")
+        raise ValueError("Saved file does not contain a fitted sklearn probability model.")
     if set(pipeline.classes_) != set(ACTIONS):
         raise ValueError("Saved model classes do not match supported firewall actions.")
     return bundle
@@ -48,4 +48,5 @@ def predict(bundle: dict, features: list[float]) -> tuple[str, float, dict[str, 
         str(label): float(probability)
         for label, probability in zip(model.classes_, probability_vector)
     }
-    return action, round(probabilities[action] * 100, 1), probabilities
+    # Keep the raw percentage from the model; display formatting is browser-only.
+    return action, probabilities[action] * 100, probabilities

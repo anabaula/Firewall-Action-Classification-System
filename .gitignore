@@ -2,8 +2,8 @@
 __pycache__/
 *.py[cod]
 .DS_Store
-# The dataset and generated outputs can be large or user-generated.
-data/log2.csv
+# Commit the ORIGINAL UCI dataset at data/log2.csv for reproducible training.
+# Generated outputs remain ignored.
 # Generated model and report are recreated by train_model.py.
 model/firewall_random_forest.json
 model/firewall_random_forest.joblib

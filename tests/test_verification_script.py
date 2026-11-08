@@ -13,7 +13,7 @@ REQUIRED = [
     "app.py", "model_service.py", "data_pipeline.py", "train_model.py",
     "tests/test_preprocessing.py", "notebooks/DataCleaning.ipynb",
     "requirements.txt", "templates/index.html", "static/app.js",
-    "static/style.css", "data/log2_cleaned.csv",
+    "static/style.css", "data/log2.csv",
     "model/firewall_random_forest.joblib",
     "data/evaluation_report.json", "data/data_quality_report.json",
     ".venv/Scripts/python.exe",
@@ -50,10 +50,10 @@ class ProjectVerifierTests(unittest.TestCase):
         self.assertNotIn("[MISSING]", result.stdout)
 
     def test_missing_dataset_alone_returns_failure(self):
-        present = [name for name in REQUIRED if name != "data/log2_cleaned.csv"]
+        present = [name for name in REQUIRED if name != "data/log2.csv"]
         result = self.run_copy(present)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("data\\log2_cleaned.csv or data\\log2.csv", result.stdout)
+        self.assertIn("data\\log2.csv", result.stdout)
 
 
 if __name__ == "__main__":

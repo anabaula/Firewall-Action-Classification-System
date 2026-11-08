@@ -10,9 +10,9 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-if not exist "data\log2_cleaned.csv" if not exist "data\log2.csv" (
-  echo ERROR: No input dataset was found.
-  echo Provide data\log2_cleaned.csv or data\log2.csv.
+if not exist "data\log2.csv" (
+  echo ERROR: The raw UCI dataset was not found.
+  echo Provide data\log2.csv.
   pause
   exit /b 1
 )
