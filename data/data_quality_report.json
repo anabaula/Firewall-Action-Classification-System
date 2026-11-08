@@ -1,0 +1,37 @@
+{
+  "source_file": "log2.csv",
+  "raw_rows": 65532,
+  "valid_rows_before_deduplication": 65532,
+  "source_class_counts_before_deduplication": {
+    "Allow": 37640,
+    "Drop": 12851,
+    "Deny": 14987,
+    "Reset": 54
+  },
+  "excluded_invalid_rows": 0,
+  "invalid_reason_counts": {},
+  "missing_feature_counts_before_imputation": {
+    "source_port": 0,
+    "destination_port": 0,
+    "nat_source_port": 0,
+    "nat_destination_port": 0,
+    "total_bytes": 0,
+    "bytes_sent": 0,
+    "bytes_received": 0,
+    "total_packets": 0,
+    "connection_duration": 0,
+    "forward_packets": 0,
+    "backward_packets": 0
+  },
+  "exact_duplicate_rows_removed": 8362,
+  "conflicting_feature_groups": 9,
+  "conflicting_feature_rows_removed": 18,
+  "rows_after_cleaning": 57152,
+  "class_counts_after_cleaning": {
+    "Allow": 37438,
+    "Drop": 11627,
+    "Deny": 8033,
+    "Reset": 54
+  },
+  "policy": "Pandas validation, drop exact duplicates, quarantine conflicting labels; fit SimpleImputer only on each training fold. No arbitrary outlier removal."
+}
