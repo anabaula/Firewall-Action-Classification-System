@@ -33,6 +33,10 @@ COLUMN_MAP = {
 }
 PORTS = FEATURE_NAMES[:4]
 WHOLE_NUMBERS = [feature for feature in FEATURE_NAMES if feature != "connection_duration"]
+ACTION_LABELS = {
+    "allow": "Allow", "deny": "Deny", "drop": "Drop",
+    "reset-both": "Reset", "reset": "Reset",
+}
 
 
 def norm_header(value: str) -> str:
@@ -41,8 +45,7 @@ def norm_header(value: str) -> str:
 
 def normalize_action(value: str) -> str | None:
     label = re.sub(r"[-_\s]+", "-", str(value).strip().lower())
-    return {"allow": "Allow", "deny": "Deny", "drop": "Drop",
-            "reset-both": "Reset", "reset": "Reset"}.get(label)
+    return ACTION_LABELS.get(label)
 
 
 def load_dataset(path: str | Path) -> tuple[list[dict], Counter, dict]:
@@ -92,16 +95,11 @@ def load_dataset(path: str | Path) -> tuple[list[dict], Counter, dict]:
     reject((numbers[PORTS] > 65535).any(axis=1), "port_out_of_range")
     reject(numbers["total_packets"].notna() & numbers["total_packets"].le(0),
            "nonpositive_packet_count")
-    packet_columns = ["forward_packets", "backward_packets", "total_packets"]
-    has_packet_values = numbers[packet_columns].notna().all(axis=1)
     packets_sent = numbers["forward_packets"] + numbers["backward_packets"]
-    reject(has_packet_values & (packets_sent > numbers["total_packets"]),
-           "inconsistent_packet_count")
+    reject(packets_sent > numbers["total_packets"], "inconsistent_packet_count")
 
-    byte_columns = ["bytes_sent", "bytes_received", "total_bytes"]
-    has_byte_values = numbers[byte_columns].notna().all(axis=1)
     bytes_transferred = numbers["bytes_sent"] + numbers["bytes_received"]
-    reject(has_byte_values & (bytes_transferred > numbers["total_bytes"] * 1.02 + 1e-9),
+    reject(bytes_transferred > numbers["total_bytes"] * 1.02 + 1e-9,
            "inconsistent_byte_count")
 
     # 4. Remove exact duplicates and contradictory labels.
@@ -111,8 +109,9 @@ def load_dataset(path: str | Path) -> tuple[list[dict], Counter, dict]:
     unique = accepted.drop_duplicates(subset=FEATURE_NAMES + ["action"]).copy()
     # An identical traffic record with two different answers cannot be
     # learned reliably; quarantine all such conflicts before splitting.
-    labels_per_traffic = unique.groupby(FEATURE_NAMES, dropna=False)["action"].transform("nunique")
-    conflicting = labels_per_traffic > 1
+    conflicting = (
+        unique.groupby(FEATURE_NAMES, dropna=False)["action"].transform("nunique") > 1
+    )
     conflict_groups = unique.loc[conflicting, FEATURE_NAMES].drop_duplicates()
     clean = unique.loc[~conflicting].copy()
     if clean.empty:
@@ -122,11 +121,12 @@ def load_dataset(path: str | Path) -> tuple[list[dict], Counter, dict]:
         raise ValueError("Dataset must contain all four firewall action classes.")
 
     # 5. Return clean records plus a report of every change made.
-    records = [
-        {"features": [float(row[feature]) for feature in FEATURE_NAMES],
-         "action": str(row["action"])}
-        for _, row in clean.iterrows()
-    ]
+    records = []
+    for _, row in clean.iterrows():
+        records.append({
+            "features": [float(row[feature]) for feature in FEATURE_NAMES],
+            "action": str(row["action"]),
+        })
     quality = {
         "source_file": path.name,
         "raw_rows": int(len(raw)),

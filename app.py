@@ -48,24 +48,19 @@ MODEL_LOAD_ERROR = (
     "then restart NetSentry."
 )
 
-ACTION_DETAILS = {
-    "Allow": {
-        "description": "The model predicts this record resembles firewall traffic labeled Allow in the training data.",
-        "explanation": "This is a prediction from historical records, not a live firewall rule or a security guarantee.",
-    },
-    "Deny": {
-        "description": "The model predicts this record resembles firewall traffic labeled Deny in the training data.",
-        "explanation": "This is a prediction from historical records, not a live firewall rule or a security guarantee.",
-    },
-    "Drop": {
-        "description": "The model predicts this record resembles firewall traffic labeled Drop in the training data.",
-        "explanation": "This is a prediction from historical records, not a live firewall rule or a security guarantee.",
-    },
-    "Reset": {
-        "description": "The model predicts this record resembles traffic labeled Reset-Both in the training data.",
-        "explanation": "Reset-Both is displayed as Reset. This prediction does not control a real connection.",
-    },
+# Messages shown with each prediction.
+ACTION_DESCRIPTIONS = {
+    "Allow": "The model predicts this record resembles firewall traffic labeled Allow in the training data.",
+    "Deny": "The model predicts this record resembles firewall traffic labeled Deny in the training data.",
+    "Drop": "The model predicts this record resembles firewall traffic labeled Drop in the training data.",
+    "Reset": "The model predicts this record resembles traffic labeled Reset-Both in the training data.",
 }
+DEFAULT_EXPLANATION = (
+    "This is a prediction from historical records, not a live firewall rule or a security guarantee."
+)
+RESET_EXPLANATION = (
+    "Reset-Both is displayed as Reset. This prediction does not control a real connection."
+)
 
 
 def load_saved_model():
@@ -227,12 +222,11 @@ def predict_route():
     except (TypeError, ValueError, OverflowError) as error:
         return jsonify({"error": str(error) or "Please check your inputs."}), 400
 
-    details = ACTION_DETAILS.get(action, ACTION_DETAILS["Allow"])
     return jsonify({
         "action": action,
         "confidence": confidence,
-        "description": details["description"],
-        "explanation": details["explanation"],
+        "description": ACTION_DESCRIPTIONS.get(action, ACTION_DESCRIPTIONS["Allow"]),
+        "explanation": RESET_EXPLANATION if action == "Reset" else DEFAULT_EXPLANATION,
         "model_type": "scikit-learn RandomForestClassifier",
         "dataset": model.get("dataset_name", DATASET_NAME),
         "is_synthetic_demo_model": False,
