@@ -24,11 +24,11 @@ if not exist ".venv\Scripts\python.exe" (
   echo Virtual environment already exists; keeping it.
 )
 echo Installing requirements...
-".venv\Scripts\python.exe" -m pip install -r requirements.txt
+".venv\Scripts\python.exe" -m pip install -r requirements-dev.txt
 if errorlevel 1 goto failed
 echo.
 echo SUCCESS: setup is ready.
-echo Next, run train_model.bat using the included data\log2_cleaned.csv.
+echo Next, run train_model.bat using the included data\log2.csv.
 pause
 exit /b 0
 :failed

@@ -85,13 +85,15 @@ Use Python 3.10+ and a virtual environment.
 3. `verify_project.bat` — verifies expected files exist.
 4. `start_website.bat` — starts Flask locally at http://127.0.0.1:5000.
 
-Equivalent commands, from the project root:
+Equivalent commands, from the project root (use the virtual environment rather than the system Python):
 
 ```powershell
 .\.venv\Scripts\python.exe train_model.py
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe app.py
 ```
+
+Run `run_tests.bat` to execute all automated tests with the project's virtual environment. `setup_project.bat` installs `requirements-dev.txt`, including pytest, so a fresh setup is ready for testing. Running `python -m pytest` without activating `.venv` may use a different Python installation with missing dependencies.
 
 Training preserves scikit-learn `Pipeline(SimpleImputer, RandomForestClassifier)`, `class_weight="balanced"`, 100 trees, seed 42, and an untouched stratified 20% test split. Within the 80% training partition, the script compares unrestricted, leaf-size-2/depth-24, and leaf-size-3/depth-18 forests; then compares training-only calibrated finalists by validation macro-F1 (to account for the rare Reset class). The selected Random Forest receives 3-fold cross-validated **sigmoid probability calibration**, fitted entirely on training data. The selected base model still receives 5-fold training-only accuracy/F1 cross-validation, and the holdout is used only for final evaluation. The deployed `model/firewall_random_forest.joblib` contains the fitted calibrated Random Forest and its original feature order.
 
