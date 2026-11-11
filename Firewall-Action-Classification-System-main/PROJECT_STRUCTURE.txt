@@ -1,0 +1,34 @@
+Firewall Action Classification System — NetSentry
+
+SOURCE OF TRUTH
+  data/log2.csv                      Original UCI Internet Firewall Data (65,532 rows)
+  notebooks/DataCleaning.ipynb       Jupyter notebook with relative CSV path, pandas EDA,
+                                    Pipelines, stratified cross-validation and model comparison
+
+DATA PREPROCESSING AND ML
+  data_pipeline.py                   Pandas-based validation, deduplication and audit
+  train_model.py                     Scikit-learn 100-tree Random Forest, CV and held-out test
+  model_service.py                   Trusted calibrated RF .joblib load and raw confidence predictions
+  data/data_quality_report.json      Generated audit, Git ignored
+  data/evaluation_report.json        Generated metrics, Git ignored
+  model/firewall_random_forest.joblib Generated model, Git ignored
+
+WEBSITE
+  app.py                             Flask routes and input validation
+  templates/index.html              Page markup
+  static/style.css                   Styles
+  static/app.js                      UI interactions and local history
+
+TESTING AND STARTUP
+  requirements.txt                   Flask, pandas, scikit-learn, joblib
+  setup_project.bat                  Build virtual environment
+  train_model.bat                    Train from data/log2.csv
+  verify_project.bat                 Check expected files
+  start_website.bat                  Start website
+  tests/test_preprocessing.py        Cleaning and split tests
+  tests/test_model_service.py        Model tests
+  tests/test_api.py                  Website/API tests
+  tests/test_verification_script.py  Windows verification tests
+
+Original source: https://archive.ics.uci.edu/dataset/542/internet+firewall+data
+Read README.md for details, limitations, and course-method alignment.
