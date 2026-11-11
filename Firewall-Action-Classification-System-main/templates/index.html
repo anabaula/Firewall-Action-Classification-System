@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#ffffff">
   <title>Firewall Network Classifier | NetSentry</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='responsive-viewport-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='dashboard-ui-1') }}">
 </head>
 <body>
   <div class="site-shell">
@@ -17,12 +17,21 @@
         <path d="M27 30c2 3 4 5 2 8-1 2-4 2-5 0-2-3 1-5 3-8Z" fill="#fff1c2"/>
       </svg>
       <h1>Firewall Network Classifier</h1>
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch to dark mode" aria-pressed="false">
+        <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20.2 15.6A8.6 8.6 0 0 1 8.4 3.8 8.7 8.7 0 1 0 20.2 15.6Z" fill="currentColor"/>
+        </svg>
+        <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"/>
+        </svg>
+      </button>
     </header>
     <main class="dashboard-grid">
       <section class="panel input-panel" aria-labelledby="input-title">
         <div class="panel-heading">
           <span class="heading-mark traffic-mark" aria-hidden="true"></span>
-          <h2 id="input-title">Traffic input</h2>
+          <h2 id="input-title">Traffic Input</h2>
         </div>
         <form id="traffic-form" autocomplete="off">
           <div class="form-grid">
@@ -137,6 +146,6 @@
       <button type="button" class="btn btn-secondary" id="details-done">Close</button>
     </div>
   </dialog>
-  <script src="{{ url_for('static', filename='app.js', v='confidence-two-decimals-2') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='dashboard-ui-1') }}"></script>
 </body>
 </html>

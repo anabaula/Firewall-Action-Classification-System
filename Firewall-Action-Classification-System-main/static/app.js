@@ -8,6 +8,14 @@ const form = document.getElementById('traffic-form');
 const message = document.getElementById('form-message');
 const predictButton = document.getElementById('predict-btn');
 const generateButton = document.getElementById('generate-btn');
+const themeToggle = document.getElementById('theme-toggle');
+
+themeToggle.addEventListener('click', () => {
+  const isDark = document.documentElement.dataset.theme !== 'dark';
+  document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
+  themeToggle.setAttribute('aria-pressed', String(isDark));
+  themeToggle.setAttribute('aria-label', `Switch to ${isDark ? 'light' : 'dark'} mode`);
+});
 
 function escapeHTML(value) {
   const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -220,7 +228,8 @@ generateButton.addEventListener('click', async () => {
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }
     clearPrediction();
-    message.textContent = 'Held-out test example loaded. Click Classify to predict.';
+    message.textContent = '';
+    message.className = 'form-message';
   } catch (error) {
     message.textContent = error.message || 'Could not load a dataset example.';
   } finally {
@@ -266,14 +275,14 @@ form.addEventListener('submit', async event => {
       confidence: result.confidence
     };
     try {
-      saveHistory([record, ...getHistory()]);
-      historyPage = 0;
-      renderHistory();
-      message.textContent = 'Saved to history.';
-    } catch {
-      message.textContent = 'Predicted. History not saved.';
-    }
-    message.className = 'form-message success';
+    saveHistory([record, ...getHistory()]);
+    historyPage = 0;
+    renderHistory();
+   } catch {
+    // Do not display informational success messages.
+  }
+   message.textContent = '';
+   message.className = 'form-message';
   } catch (error) {
     message.textContent = error.message || 'Could not reach the prediction server.';
   } finally {
