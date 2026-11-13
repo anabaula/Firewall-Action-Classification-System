@@ -7,7 +7,6 @@ This file only handles web requests and checks the user's form inputs.
 import json
 import math
 import secrets
-from functools import lru_cache
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
@@ -160,7 +159,6 @@ def health():
     })
 
 
-@lru_cache(maxsize=1)
 def _sample_rows():
     """Recreate the training script's 20% held-out test split for Generate.
 

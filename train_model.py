@@ -1,13 +1,4 @@
-"""Train a Random Forest from the original UCI firewall CSV.
-
-Steps: clean data, split, cross-validate, train, test, then save the model.
-Preprocessing is inside the scikit-learn Pipeline to avoid data leakage.
-"""
-from __future__ import annotations
-
-import argparse
 import json
-from collections import Counter
 from pathlib import Path
 
 import joblib
@@ -33,83 +24,131 @@ QUALITY_PATH = BASE_DIR / "data" / "data_quality_report.json"
 DATASET_DOI = "10.24432/C5131M"
 
 
-def make_pipeline(trees: int = 100, *, min_samples_leaf: int = 1,
-                  max_depth: int | None = None) -> Pipeline:
-    """Reusable Random Forest pipeline with optional tree regularization."""
+def make_pipeline(trees=100, min_samples_leaf=1, max_depth=None):
+    """Create our two-step scikit-learn pipeline.
+
+    1. Fill missing values using the training-fold median.
+    2. Train a Random Forest. Trees do not require feature scaling.
+    """
     return Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
         ("model", RandomForestClassifier(
-            n_estimators=trees, random_state=42, class_weight="balanced",
-            min_samples_leaf=min_samples_leaf, max_depth=max_depth, n_jobs=-1,
+            n_estimators=trees,
+            random_state=42,
+            class_weight="balanced",
+            min_samples_leaf=min_samples_leaf,
+            max_depth=max_depth,
+            n_jobs=-1,
         )),
     ])
 
 
-def make_calibrated_pipeline(trees: int = 100, *, min_samples_leaf: int = 1,
-                             max_depth: int | None = None,
-                             calibration_folds: int = 3) -> CalibratedClassifierCV:
-    """Sigmoid calibration from out-of-fold predictions on training data only."""
+
+def make_calibrated_pipeline(trees=100, min_samples_leaf=1,
+                             max_depth=None, calibration_folds=3):
+    """Improve confidence scores using training-only sigmoid calibration.
+
+    The Random Forest still predicts the action; calibration adjusts its
+    probabilities. The reserved 20% test data is NOT used here.
+    """
+    pipeline = make_pipeline(
+        trees, min_samples_leaf=min_samples_leaf, max_depth=max_depth,
+    )
     return CalibratedClassifierCV(
-        estimator=make_pipeline(trees, min_samples_leaf=min_samples_leaf,
-                                max_depth=max_depth),
-        method="sigmoid", cv=calibration_folds, ensemble=False,
+        estimator=pipeline,
+        method="sigmoid",
+        cv=calibration_folds,
+        ensemble=False,
     )
 
 
-def evaluate(y_true, predictions, probabilities, model_classes, *, calibrated=False) -> dict:
-    """Accuracy, minority-class performance, and confidence diagnostics."""
-    detail = classification_report(
+
+def evaluate(y_true, predictions, probabilities, model_classes, calibrated=False):
+    """Calculate the same evaluation metrics used in our training report.
+
+    Accuracy = correct predictions / all predictions.
+    Precision, recall and F1 are reported separately for all four actions.
+    Confidence diagnostics show whether predicted probabilities are reliable.
+    """
+    # STEP 1: Classification scores for each action.
+    report = classification_report(
         y_true, predictions, labels=ACTIONS, output_dict=True, zero_division=0,
     )
+    accuracy = float(accuracy_score(y_true, predictions))
+    macro_f1 = float(f1_score(
+        y_true, predictions, labels=ACTIONS, average="macro", zero_division=0,
+    ))
+
+    class_scores = {}
+    for action in ACTIONS:
+        score = report[action]
+        class_scores[action] = {
+            "precision": float(score["precision"]),
+            "recall": float(score["recall"]),
+            "f1_score": float(score["f1-score"]),
+            "support": int(score["support"]),
+        }
+
+    # STEP 2: Actual-versus-predicted confusion matrix.
     matrix = confusion_matrix(y_true, predictions, labels=ACTIONS)
-    confusion = {
-        actual: {predicted: int(matrix[i, j]) for j, predicted in enumerate(ACTIONS)}
-        for i, actual in enumerate(ACTIONS)
-    }
+    confusion = {}
+    for actual_index, actual_action in enumerate(ACTIONS):
+        confusion[actual_action] = {}
+        for predicted_index, predicted_action in enumerate(ACTIONS):
+            confusion[actual_action][predicted_action] = int(
+                matrix[actual_index, predicted_index]
+            )
+
+    # STEP 3: Confidence scores. These are probabilities, not guarantees.
     probabilities = np.asarray(probabilities, dtype=float)
     truth = np.asarray(y_true)
-    class_to_index = {str(c): i for i, c in enumerate(model_classes)}
+    confidence = probabilities.max(axis=1)
+    correct = np.asarray(predictions) == truth
+
+    # The Brier score compares the probabilities with the actual classes.
     true_one_hot = np.zeros_like(probabilities)
-    for row, label in enumerate(truth):
-        true_one_hot[row, class_to_index[str(label)]] = 1.
-    multiclass_brier = float(np.mean(np.sum(
+    class_index = {str(name): index for index, name in enumerate(model_classes)}
+    for row_number, actual_label in enumerate(truth):
+        true_one_hot[row_number, class_index[str(actual_label)]] = 1.0
+    brier_score = float(np.mean(np.sum(
         (probabilities - true_one_hot) ** 2, axis=1,
     )))
-    confidence = probabilities.max(axis=1)
-    correct = (np.asarray(predictions) == truth)
-    ece = 0.
+
+    # Expected calibration error: compare confidence with correctness
+    # in ten groups (0-10%, 10-20%, ..., 90-100%).
+    calibration_error = 0.0
     for lower in np.linspace(0, 1, 11)[:-1]:
-        upper = lower + .1
-        membership = (confidence >= lower) & (
-            confidence <= upper if upper >= 1 else confidence < upper
-        )
-        if membership.any():
-            ece += float(membership.mean() * abs(
-                confidence[membership].mean() - correct[membership].mean()
-            ))
+        upper = lower + 0.1
+        if upper >= 1:
+            in_group = (confidence >= lower) & (confidence <= upper)
+        else:
+            in_group = (confidence >= lower) & (confidence < upper)
+
+        if in_group.any():
+            fraction = in_group.mean()
+            average_confidence = confidence[in_group].mean()
+            actual_accuracy = correct[in_group].mean()
+            calibration_error += float(
+                fraction * abs(average_confidence - actual_accuracy)
+            )
+
+    diagnostics = {
+        "ece_10_bins": calibration_error,
+        "multiclass_brier_score": brier_score,
+        "probabilities_calibrated": bool(calibrated),
+        "exact_100_confidence_count": int(np.sum(confidence == 1)),
+        "exact_100_confidence_wrong": int(np.sum((confidence == 1) & ~correct)),
+        "median_confidence": float(np.median(confidence)),
+    }
     return {
         "test_size": int(len(truth)),
-        "accuracy": float(accuracy_score(y_true, predictions)),
-        "macro_f1": float(f1_score(y_true, predictions, labels=ACTIONS, average="macro", zero_division=0)),
-        "per_class": {
-            action: {
-                "precision": float(detail[action]["precision"]),
-                "recall": float(detail[action]["recall"]),
-                "f1_score": float(detail[action]["f1-score"]),
-                "support": int(detail[action]["support"]),
-            }
-            for action in ACTIONS
-        },
+        "accuracy": accuracy,
+        "macro_f1": macro_f1,
+        "per_class": class_scores,
         "confusion_matrix": confusion,
-        "calibration_diagnostics": {
-            "ece_10_bins": ece,
-            "multiclass_brier_score": multiclass_brier,
-            "probabilities_calibrated": bool(calibrated),
-            "exact_100_confidence_count": int(np.sum(confidence == 1)),
-            "exact_100_confidence_wrong": int(np.sum((confidence == 1) & ~correct)),
-            "median_confidence": float(np.median(confidence)),
-        },
+        "calibration_diagnostics": diagnostics,
     }
+
 
 
 REGULARIZATION_OPTIONS = [
@@ -119,107 +158,118 @@ REGULARIZATION_OPTIONS = [
 ]
 
 
-def choose_parameters(X_train, y_train, trees: int, calibration_folds: int):
-    """Choose settings with training-only validation, never the held-out test.
+def choose_parameters(X_train, y_train, trees, calibration_folds):
+    """Compare a few forest settings without touching the final test set.
 
-    Compare uncalibrated regularization candidates first, then calibrate the
-    unrestricted model and the strongest regularized finalist. Select with
-    validation macro F1 to avoid overlooking the rare Reset class.
+    We first compare three tree configurations on training-only validation.
+    Then we calibrate the unrestricted forest and the best regularized one.
+    The best calibrated macro F1 wins (accuracy and Brier break ties).
     """
+    # Hold 20% of the TRAINING partition for model selection.
     X_fit, X_val, y_fit, y_val = train_test_split(
         X_train, y_train, test_size=0.2, random_state=43, stratify=y_train,
     )
-    comparisons = []
-    for name, params in REGULARIZATION_OPTIONS:
-        forest = make_pipeline(trees, **params)
-        forest.fit(X_fit, y_fit)
-        values = evaluate(y_val, forest.predict(X_val),
-                          forest.predict_proba(X_val), forest.classes_)
-        comparisons.append({
-            "candidate": name, "parameters": params,
-            "validation_accuracy": values["accuracy"],
-            "validation_macro_f1": values["macro_f1"],
-            "validation_reset_recall": values["per_class"]["Reset"]["recall"],
-            "exact_100_count": values["calibration_diagnostics"]["exact_100_confidence_count"],
-        })
-        print(f"  {name}: macro F1={values['macro_f1']:.4f}, "
-              f"Reset recall={values['per_class']['Reset']['recall']:.3f}",
-              flush=True)
 
+    # Part A: Which settings work best before calibration?
+    comparisons = []
+    for name, settings in REGULARIZATION_OPTIONS:
+        model = make_pipeline(trees, **settings)
+        model.fit(X_fit, y_fit)
+        results = evaluate(
+            y_val, model.predict(X_val), model.predict_proba(X_val),
+            model.classes_,
+        )
+
+        comparisons.append({
+            "candidate": name,
+            "parameters": settings,
+            "validation_accuracy": results["accuracy"],
+            "validation_macro_f1": results["macro_f1"],
+            "validation_reset_recall": results["per_class"]["Reset"]["recall"],
+            "exact_100_count": results["calibration_diagnostics"]["exact_100_confidence_count"],
+        })
+        print(
+            f"  {name}: macro F1={results['macro_f1']:.4f}, "
+            f"Reset recall={results['per_class']['Reset']['recall']:.3f}",
+            flush=True,
+        )
+
+    # Always compare the unrestricted forest with the BEST regularized one.
+    unrestricted = comparisons[0]
     best_regularized = max(
         comparisons[1:],
-        key=lambda item: (item["validation_macro_f1"], item["validation_accuracy"]),
+        key=lambda result: (
+            result["validation_macro_f1"],
+            result["validation_accuracy"],
+        ),
     )
+
+    # Part B: Check which calibrated candidate gives better probabilities.
     calibrated_comparison = []
-    for candidate in (comparisons[0], best_regularized):
+    for candidate in (unrestricted, best_regularized):
         model = make_calibrated_pipeline(
             trees, **candidate["parameters"], calibration_folds=calibration_folds,
         )
         model.fit(X_fit, y_fit)
-        values = evaluate(y_val, model.predict(X_val),
-                          model.predict_proba(X_val), model.classes_,
-                          calibrated=True)
+        results = evaluate(
+            y_val, model.predict(X_val), model.predict_proba(X_val),
+            model.classes_, calibrated=True,
+        )
         calibrated_comparison.append({
             "candidate": candidate["candidate"],
             "parameters": candidate["parameters"],
-            "validation_accuracy": values["accuracy"],
-            "validation_macro_f1": values["macro_f1"],
-            "validation_reset_recall": values["per_class"]["Reset"]["recall"],
-            "validation_brier_score": values["calibration_diagnostics"]["multiclass_brier_score"],
-            "exact_100_count": values["calibration_diagnostics"]["exact_100_confidence_count"],
+            "validation_accuracy": results["accuracy"],
+            "validation_macro_f1": results["macro_f1"],
+            "validation_reset_recall": results["per_class"]["Reset"]["recall"],
+            "validation_brier_score": results["calibration_diagnostics"]["multiclass_brier_score"],
+            "exact_100_count": results["calibration_diagnostics"]["exact_100_confidence_count"],
         })
-        print(f"  calibrated {candidate['candidate']}: "
-              f"macro F1={values['macro_f1']:.4f}, "
-              f"Reset recall={values['per_class']['Reset']['recall']:.3f}",
-              flush=True)
+        print(
+            f"  calibrated {candidate['candidate']}: "
+            f"macro F1={results['macro_f1']:.4f}, "
+            f"Reset recall={results['per_class']['Reset']['recall']:.3f}",
+            flush=True,
+        )
 
-    best = max(calibrated_comparison, key=lambda item: (
-        item["validation_macro_f1"], item["validation_accuracy"],
-        -item["validation_brier_score"],
-    ))
-    return best["parameters"], {
-        "procedure": "Training-only stratified 20% validation (random_state=43); "
-                     "select calibrated macro-F1, break ties by accuracy and Brier",
+    best = max(
+        calibrated_comparison,
+        key=lambda result: (
+            result["validation_macro_f1"],
+            result["validation_accuracy"],
+            -result["validation_brier_score"],
+        ),
+    )
+
+    selection_report = {
+        "procedure": (
+            "Training-only stratified 20% validation (random_state=43); "
+            "select calibrated macro-F1, break ties by accuracy and Brier"
+        ),
         "validation_size": len(y_val),
         "regularization_candidates": comparisons,
         "calibrated_finalists": calibrated_comparison,
         "selected_candidate": best["candidate"],
     }
+    return best["parameters"], selection_report
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--dataset", type=Path,
-        default=ORIGINAL_DATA_PATH,
-        help="Raw UCI CSV (default: data/log2.csv).",
-    )
-    parser.add_argument("--validate-only", action="store_true", help="Only audit dataset.")
-    parser.add_argument("--trees", type=int, default=100, help="Forest trees (Colab: 100).")
-    parser.add_argument("--calibration-folds", type=int, default=3,
-                        help="Training-only sigmoid calibration folds (default: 3).")
-    parser.add_argument(
-        "--cv-folds", type=int, default=5,
-        help="Training-only stratified cross-validation folds (0 to skip; Colab: 5).",
-    )
-    args = parser.parse_args()
-    if (args.trees < 1 or args.cv_folds not in (0, 2, 3, 4, 5, 6, 7, 8, 9, 10)
-            or not 2 <= args.calibration_folds <= 10):
-        parser.error("--trees must be positive, --cv-folds 0 or 2–10, "
-                     "and --calibration-folds 2–10.")
+
+def main():
+    # Classroom-style settings: 100 trees, 5 validation folds and 3 calibration folds.
+    dataset_path = ORIGINAL_DATA_PATH
+    trees = 100
+    cv_folds = 5
+    calibration_folds = 3
 
     # Step 1: Read and clean the raw CSV. Keep a report of excluded rows.
-    rows, _counts, quality = load_dataset(args.dataset)
+    rows, _counts, quality = load_dataset(dataset_path)
     QUALITY_PATH.parent.mkdir(parents=True, exist_ok=True)
     QUALITY_PATH.write_text(json.dumps(quality, indent=2), encoding="utf-8")
     print(
-        f"Source: {args.dataset.name}; original rows: {quality['raw_rows']:,}; "
+        f"Source: {dataset_path.name}; original rows: {quality['raw_rows']:,}; "
         f"retained: {len(rows):,}; duplicate conflicts quarantined: "
         f"{quality['conflicting_feature_rows_removed']:,}"
     )
-    if args.validate_only:
-        print(f"Data quality report: {QUALITY_PATH}")
-        return
 
     # Step 2: Separate input measurements (X) from action labels (y).
     X = pd.DataFrame(
@@ -239,15 +289,15 @@ def main() -> None:
     print(f"Train: {len(X_train):,}; held-out test: {len(X_test):,}")
     print("Comparing tree regularization and calibration on training-only validation...")
     selected_params, selection = choose_parameters(
-        X_train, y_train, args.trees, args.calibration_folds,
+        X_train, y_train, trees, calibration_folds,
     )
     print(f"Selected {selection['selected_candidate']}: {selected_params}", flush=True)
-    pipeline = make_pipeline(args.trees, **selected_params)
+    pipeline = make_pipeline(trees, **selected_params)
     # Step 4: Cross-validate the selected base forest on training data only.
     cv = None
-    if args.cv_folds:
-        print(f"Evaluating {args.cv_folds}-fold stratified CV on training data only...")
-        splitter = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=42)
+    if cv_folds:
+        print(f"Evaluating {cv_folds}-fold stratified CV on training data only...")
+        splitter = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
         scores = cross_validate(
             pipeline, X_train, y_train, cv=splitter,
             scoring={"accuracy": "accuracy", "macro_f1": "f1_macro"},
@@ -258,7 +308,7 @@ def main() -> None:
         accuracy_gap = 100 * (training_accuracy - validation_accuracy)
 
         cv = {
-            "folds": args.cv_folds,
+            "folds": cv_folds,
             "accuracy_scores": [float(x) for x in scores["test_accuracy"]],
             "mean_accuracy": validation_accuracy,
             "macro_f1_scores": [float(x) for x in scores["test_macro_f1"]],
@@ -276,7 +326,7 @@ def main() -> None:
     # Step 5: Calibrate with internal training folds, then evaluate on X_test.
     print("Fitting training-only cross-validated sigmoid calibration...", flush=True)
     calibrated_pipeline = make_calibrated_pipeline(
-        args.trees, **selected_params, calibration_folds=args.calibration_folds,
+        trees, **selected_params, calibration_folds=calibration_folds,
     )
     calibrated_pipeline.fit(X_train, y_train)
     predicted = calibrated_pipeline.predict(X_test)
@@ -290,16 +340,16 @@ def main() -> None:
     report = {
         "dataset": DATASET_NAME,
         "dataset_doi": DATASET_DOI,
-        "dataset_file": args.dataset.name,
+        "dataset_file": dataset_path.name,
         "implementation": "CalibratedClassifierCV(sigmoid, Pipeline(SimpleImputer, RandomForestClassifier))",
         "model_selection": selection,
         "calibration": {
-            "method": "sigmoid", "cv_folds": args.calibration_folds,
+            "method": "sigmoid", "cv_folds": calibration_folds,
             "training_only": True, "ensemble": False,
             "note": "Calibration uses only the 80% training partition.",
         },
         "model_parameters": {
-            "n_estimators": args.trees,
+            "n_estimators": trees,
             "random_state": 42,
             "class_weight": "balanced",
             "imputer_strategy": "median",
@@ -308,8 +358,8 @@ def main() -> None:
         "quality_report": quality,
         "train_split_size": len(X_train),
         "test_split_size": len(X_test),
-        "training_class_counts": dict(Counter(y_train)),
-        "test_class_counts": dict(Counter(y_test)),
+        "training_class_counts": y_train.value_counts().to_dict(),
+        "test_class_counts": y_test.value_counts().to_dict(),
         "cross_validation": cv,
         "uncalibrated_holdout": {
             "accuracy": raw_metrics["accuracy"],
@@ -330,7 +380,7 @@ def main() -> None:
         "pipeline": calibrated_pipeline,
         "feature_names": FEATURE_NAMES,
         "dataset_name": DATASET_NAME,
-        "dataset_file": args.dataset.name,
+        "dataset_file": dataset_path.name,
         "training_class_counts": report["training_class_counts"],
         "warning": report["warning"],
     }

@@ -63,7 +63,7 @@
         "validation_accuracy": 0.9977036632039366,
         "validation_macro_f1": 0.788930725773834,
         "validation_reset_recall": 0.1111111111111111,
-        "validation_brier_score": 0.004372025610739363,
+        "validation_brier_score": 0.004372025610739362,
         "exact_100_count": 0
       }
     ],
@@ -90,8 +90,8 @@
     "valid_rows_before_deduplication": 65532,
     "source_class_counts_before_deduplication": {
       "Allow": 37640,
-      "Drop": 12851,
       "Deny": 14987,
+      "Drop": 12851,
       "Reset": 54
     },
     "excluded_invalid_rows": 0,
@@ -130,9 +130,9 @@
     "Reset": 43
   },
   "test_class_counts": {
-    "Deny": 1607,
     "Allow": 7488,
     "Drop": 2325,
+    "Deny": 1607,
     "Reset": 11
   },
   "cross_validation": {

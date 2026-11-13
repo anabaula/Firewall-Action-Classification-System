@@ -4,8 +4,8 @@
   "valid_rows_before_deduplication": 65532,
   "source_class_counts_before_deduplication": {
     "Allow": 37640,
-    "Drop": 12851,
     "Deny": 14987,
+    "Drop": 12851,
     "Reset": 54
   },
   "excluded_invalid_rows": 0,
